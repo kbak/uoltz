@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT_BASE = """\
 /no_think
-You are a helpful AI assistant communicating through Signal messenger.
+You are a helpful AI assistant communicating through Signal messenger.{name_line}
 
 You have access to the following skill sets:
 {skills_summary}
@@ -29,6 +29,9 @@ Always be direct and helpful. If you're unsure, say so.
 Always respond in the same language the user is currently writing in.
 """
 
+# Maximum number of messages to keep in per-sender conversation history
+MAX_HISTORY_MESSAGES = 50
+
 # Module-level references so we can swap them at runtime
 _agents: dict[str, Agent] = {}  # keyed by sender
 _registry: SkillRegistry | None = None
@@ -37,7 +40,9 @@ _model: OpenAIModel | None = None
 
 def _build_system_prompt(registry: SkillRegistry) -> str:
     """Build the system prompt with current runtime settings."""
-    base = SYSTEM_PROMPT_BASE.format(skills_summary=registry.summary())
+    name = config.signal.bot_name
+    name_line = f" Your name is {name}." if name else ""
+    base = SYSTEM_PROMPT_BASE.format(skills_summary=registry.summary(), name_line=name_line)
     base += config.formatting_instruction()
     return base
 
@@ -83,7 +88,7 @@ def create_agent(model_id: str | None = None) -> tuple[Agent, SkillRegistry]:
 
 
 def get_agent_for(sender: str) -> Agent:
-    """Return (or lazily create) a per-sender Agent instance."""
+    """Return (or lazily create) a per-sender Agent instance, with history trimming."""
     if _model is None or _registry is None:
         raise RuntimeError("Agent not initialized. Call create_agent() first.")
     if sender not in _agents:
@@ -93,6 +98,12 @@ def get_agent_for(sender: str) -> Agent:
             system_prompt=_build_system_prompt(_registry),
         )
         logger.info("Created new agent for sender %s", sender)
+    else:
+        # Trim conversation history to avoid unbounded memory growth
+        agent = _agents[sender]
+        if hasattr(agent, "messages") and len(agent.messages) > MAX_HISTORY_MESSAGES:
+            agent.messages = agent.messages[-MAX_HISTORY_MESSAGES:]
+            logger.debug("Trimmed history for %s to %d messages", sender, MAX_HISTORY_MESSAGES)
     return _agents[sender]
 
 

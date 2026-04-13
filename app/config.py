@@ -28,6 +28,7 @@ class SignalConfig:
     number: str = field(default_factory=lambda: os.getenv("SIGNAL_NUMBER", ""))
     allowed_numbers: frozenset[str] = field(default_factory=lambda: _parse_allowed())
     group_prefix: str = field(default_factory=lambda: os.getenv("BOT_GROUP_PREFIX", "@bot"))
+    bot_name: str = field(default_factory=lambda: os.getenv("BOT_GROUP_PREFIX", "@bot").lstrip("@"))
 
 
 @dataclass(frozen=True)

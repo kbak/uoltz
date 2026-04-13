@@ -5,6 +5,7 @@ avoiding thread-safety issues with shared conversation state.
 Ack messages fire instantly; the agent work is serialized.
 """
 
+import base64
 import queue
 import re
 import sys
@@ -14,6 +15,8 @@ import logging.handlers
 import threading
 from collections import deque
 from pathlib import Path
+
+import httpx
 
 import config
 from runtime import state
@@ -25,6 +28,24 @@ from agent import (
 )
 from skills import SkillRegistry
 from transcribe import download_and_transcribe, AUDIO_CONTENT_TYPES
+
+IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+
+def _fetch_image_b64(signal_api_url: str, attachment_id: str, content_type: str) -> dict | None:
+    """Download an image attachment and return an OpenAI-compatible image content block."""
+    try:
+        url = f"{signal_api_url.rstrip('/')}/v1/attachments/{attachment_id}"
+        resp = httpx.get(url, timeout=30)
+        resp.raise_for_status()
+        data = base64.standard_b64encode(resp.content).decode()
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{content_type};base64,{data}"},
+        }
+    except Exception as exc:
+        logger.error("Failed to fetch image attachment %s: %s", attachment_id, exc)
+        return None
 from scheduler import start_scheduler
 
 _LOG_DIR = Path("data/logs")
@@ -315,10 +336,14 @@ def _worker(signal: SignalClient):
             msg_type = item[0]
 
             if msg_type == "agent":
-                _, _signal, sender, text = item
+                _, _signal, sender, text, images = item
                 try:
                     agent = get_agent_for(sender)
-                    result = agent(text)
+                    if images:
+                        content = [{"type": "text", "text": text}] + images
+                        result = agent(content)
+                    else:
+                        result = agent(text)
                     reply = str(result)
                 except Exception as e:
                     logger.exception("Agent error for %s", sender)
@@ -452,11 +477,25 @@ def main():
                         signal.send(reply_to, f"Failed to transcribe voice message: {e}")
                         continue
 
-                if not text:
+                # Fetch image attachments for vision-capable model
+                image_atts = [a for a in attachments if a.get("contentType", "") in IMAGE_CONTENT_TYPES]
+                images = []
+                for att in image_atts:
+                    att_id = att.get("id", att.get("filename", ""))
+                    ct = att.get("contentType", "image/jpeg")
+                    block = _fetch_image_b64(cfg_signal.api_url, att_id, ct)
+                    if block:
+                        images.append(block)
+
+                if not text and not images:
                     continue
 
                 if not group_id:
                     logger.info("Message from %s: %s", sender, text[:80])
+
+                # If only an image was sent with no text, add a default prompt
+                if not text and images:
+                    text = "What's in this image?"
 
                 if text.strip().startswith("/"):
                     parts = text.strip().split(None, 1)
@@ -478,7 +517,7 @@ def main():
                         history_lines = "\n".join(f"{s}: {t}" for s, t in recent[:-1])
                         text = f"[Recent chat in this group]\n{history_lines}\n\n[User asks] {text}"
 
-                _work_queue.put(("agent", signal, reply_to, text))
+                _work_queue.put(("agent", signal, reply_to, text, images))
                 pending = _work_queue.qsize()
                 if pending > 1:
                     signal.send(reply_to, f"📋 Queued (position {pending})")
