@@ -40,16 +40,48 @@ class SignalClient:
 
     # ── Receive ──────────────────────────────────────────────
     def receive(self) -> list[dict]:
-        """Poll for new incoming messages with retry."""
-        def _do():
-            resp = self._http.get(f"/v1/receive/{self.number}")
-            resp.raise_for_status()
-            return resp.json()
-
-        result = self._retry("receive", _do)
-        if isinstance(result, Exception):
+        """Poll for new incoming messages via the REST API."""
+        try:
+            resp = self._http.get(f"/v1/receive/{self.number}?timeout=1")
+            if resp.status_code == 200:
+                return resp.json() or []
             return []
-        return result
+        except Exception as exc:
+            logger.error("receive failed: %s", exc)
+            return []
+
+    # ── Group ID resolution ───────────────────────────────────
+    def _resolve_group_id(self, group_id: str) -> str:
+        """Convert an internal group ID to the group.XXX= form needed by /v2/send."""
+        if group_id.startswith("group."):
+            return group_id
+        try:
+            resp = self._http.get(f"/v1/groups/{self.number}")
+            resp.raise_for_status()
+            for g in resp.json():
+                if g.get("internal_id") == group_id:
+                    return g["id"]
+        except Exception:
+            pass
+        return group_id
+
+    # ── React ─────────────────────────────────────────────────
+    def react(self, recipient: str, target_author: str, timestamp: int, emoji: str = "🤖") -> bool:
+        """Send an emoji reaction to a specific message."""
+        try:
+            resp = self._http.post(
+                f"/v1/reactions/{self.number}",
+                json={
+                    "reaction": emoji,
+                    "recipient": self._resolve_group_id(recipient),
+                    "target_author": target_author,
+                    "timestamp": timestamp,
+                },
+            )
+            return resp.status_code in (200, 204)
+        except Exception as exc:
+            logger.error("React failed: %s", exc)
+            return False
 
     # ── Send ─────────────────────────────────────────────────
     def send(self, recipient: str, message: str) -> bool:
@@ -66,7 +98,7 @@ class SignalClient:
                     json={
                         "message": text,
                         "number": self.number,
-                        "recipients": [recipient],
+                        "recipients": [self._resolve_group_id(recipient)],
                     },
                 )
                 resp.raise_for_status()

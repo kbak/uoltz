@@ -11,6 +11,7 @@ import config
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT_BASE = """\
+/no_think
 You are a helpful AI assistant communicating through Signal messenger.
 
 You have access to the following skill sets:
@@ -24,11 +25,14 @@ For Signal account management tasks (registering numbers, creating groups,
 linking devices), use the signal_admin tools.
 
 Always be direct and helpful. If you're unsure, say so.
+
+Always respond in the same language the user is currently writing in.
 """
 
 # Module-level references so we can swap them at runtime
-_agent: Agent | None = None
+_agents: dict[str, Agent] = {}  # keyed by sender
 _registry: SkillRegistry | None = None
+_model: OpenAIModel | None = None
 
 
 def _build_system_prompt(registry: SkillRegistry) -> str:
@@ -44,14 +48,14 @@ def create_agent(model_id: str | None = None) -> tuple[Agent, SkillRegistry]:
     Args:
         model_id: Override model ID. If None, uses config.llm.model_id.
     """
-    global _agent, _registry
+    global _agents, _registry, _model
 
     from runtime import state
 
     mid = model_id or config.llm.model_id
     max_tok = state.max_tokens or config.llm.max_tokens
 
-    model = OpenAIModel(
+    _model = OpenAIModel(
         client_args={
             "base_url": config.llm.base_url,
             "api_key": config.llm.api_key,
@@ -66,22 +70,43 @@ def create_agent(model_id: str | None = None) -> tuple[Agent, SkillRegistry]:
     if _registry is None:
         _registry = discover_skills()
 
-    system_prompt = _build_system_prompt(_registry)
+    # Clear all per-sender agents so they get lazily recreated with new model
+    _agents.clear()
 
-    _agent = Agent(
-        model=model,
+    # Return a sentinel agent for callers that expect one (e.g. scheduler)
+    sentinel = Agent(
+        model=_model,
         tools=_registry.tools,
-        system_prompt=system_prompt,
+        system_prompt=_build_system_prompt(_registry),
     )
+    return sentinel, _registry
 
-    return _agent, _registry
+
+def get_agent_for(sender: str) -> Agent:
+    """Return (or lazily create) a per-sender Agent instance."""
+    if _model is None or _registry is None:
+        raise RuntimeError("Agent not initialized. Call create_agent() first.")
+    if sender not in _agents:
+        _agents[sender] = Agent(
+            model=_model,
+            tools=_registry.tools,
+            system_prompt=_build_system_prompt(_registry),
+        )
+        logger.info("Created new agent for sender %s", sender)
+    return _agents[sender]
 
 
 def get_agent() -> Agent:
-    """Return the current agent instance."""
-    if _agent is None:
+    """Return a shared agent instance (used by scheduler and legacy callers)."""
+    if _model is None or _registry is None:
         raise RuntimeError("Agent not initialized. Call create_agent() first.")
-    return _agent
+    if _agents:
+        return next(iter(_agents.values()))
+    return Agent(
+        model=_model,
+        tools=_registry.tools,
+        system_prompt=_build_system_prompt(_registry),
+    )
 
 
 def get_registry() -> SkillRegistry:
@@ -92,9 +117,11 @@ def get_registry() -> SkillRegistry:
 
 
 def refresh_system_prompt():
-    """Update the agent's system prompt (e.g. after toggling markdown)."""
-    if _agent is not None and _registry is not None:
-        _agent.system_prompt = _build_system_prompt(_registry)
+    """Update the system prompt for all active per-sender agents."""
+    if _registry is not None:
+        prompt = _build_system_prompt(_registry)
+        for agent in _agents.values():
+            agent.system_prompt = prompt
 
 
 def list_available_models() -> list[str]:
@@ -111,8 +138,9 @@ def list_available_models() -> list[str]:
 
 def get_current_model_id() -> str:
     """Return the model ID the agent is currently using."""
-    if _agent is not None:
-        return _agent.model.config.get("model_id", config.llm.model_id)
+    if _agents:
+        agent = next(iter(_agents.values()))
+        return agent.model.config.get("model_id", config.llm.model_id)
     return config.llm.model_id
 
 
@@ -140,7 +168,6 @@ def server_reload_model(model_id: str, context_length: int) -> str:
     """
     api = _lmstudio_api_base()
 
-    # Unload current model (ignore errors — might not be loaded)
     try:
         httpx.post(
             f"{api}/api/v1/models/unload",
@@ -148,9 +175,8 @@ def server_reload_model(model_id: str, context_length: int) -> str:
             timeout=30,
         )
     except Exception:
-        pass  # model might not be loaded, that's fine
+        pass
 
-    # Load with new context length
     resp = httpx.post(
         f"{api}/api/v1/models/load",
         json={

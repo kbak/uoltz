@@ -260,6 +260,33 @@ Pick a model with tool/function-calling support for best results (e.g. Qwen 2.5,
 - [DuckDuckGo Search](https://github.com/deedy5/ddgs) — web search without API keys
 - [croniter](https://github.com/kiorky/croniter) — cron expression parsing for the scheduler
 
+## Patches (kbak fork)
+
+This fork applies the following changes on top of upstream:
+
+### `signal_client.py`
+- **`receive()`** — replaced retry-based polling with a direct `?timeout=1` long-poll to avoid lock contention with signal-cli
+- **`_resolve_group_id()`** — resolves internal group IDs (received in messages) to the `group.XXX=` format required by `/v2/send`
+- **`react()`** — sends an emoji reaction to a specific message; used to ack incoming messages with 🤖 instead of a text reply
+- **`send()`** — uses `_resolve_group_id()` so group replies are routed correctly
+
+### `bot.py`
+- **Poll interval** — reduced from 2s to 1s to match the receive timeout
+- **Mention detection** — bot can be triggered in groups via `@mention` (Signal sends these as U+FFFC) in addition to the text prefix
+- **Reaction ack** — replaced the "⏳ Got it..." text ack with a 🤖 emoji reaction on the triggering message
+- **Per-group history buffer** — last 10 messages in each group are buffered; when the bot is invoked, recent chat is prepended as context so it can handle ambiguous references (e.g. "what do you think about this?")
+- **Skill attribution removed** — tool usage messages are not sent to the user
+- **Per-sender agent routing** — uses `get_agent_for(sender)` so each sender has an isolated conversation history
+
+### `agent.py`
+- **Per-sender agent isolation** — replaced single global `_agent` with a `dict[str, Agent]` keyed by sender; agents are lazily created and share the same model/registry
+- **Language instruction** — system prompt instructs the model to always respond in the user's language
+- **Thinking mode disabled** — `/no_think` prepended to system prompt (for Qwen3 models)
+- **`get_agent_for(sender)`** — new function to retrieve or create a per-sender agent instance
+
+### `skills/web_search/skill.yaml`
+- **Disabled** — replaced by a SearXNG-based custom skill in the deployment stack
+
 ## License
 
 MIT

@@ -6,18 +6,20 @@ Ack messages fire instantly; the agent work is serialized.
 """
 
 import queue
+import re
 import sys
 import time
 import logging
 import logging.handlers
 import threading
+from collections import deque
 from pathlib import Path
 
 import config
 from runtime import state
 from signal_client import SignalClient
 from agent import (
-    create_agent, get_agent, get_registry, refresh_system_prompt,
+    create_agent, get_agent, get_agent_for, get_registry, refresh_system_prompt,
     list_available_models, get_current_model_id, get_current_max_tokens,
     server_reload_model,
 )
@@ -41,11 +43,15 @@ logging.getLogger().addHandler(_file_handler)
 
 logger = logging.getLogger("signal-bot")
 
-POLL_INTERVAL = 2
+POLL_INTERVAL = 1
 ACK_MESSAGE = "⏳ Got it, working on it..."
 
 # Global message queue — the polling loop enqueues, the worker dequeues
 _work_queue: queue.Queue = queue.Queue()
+
+# Per-group recent message buffer for topic context
+_group_history: dict[str, deque] = {}
+_GROUP_HISTORY_MAX = 10
 
 # ── Direct skill invocation (bypasses LLM tool selection) ────────────
 
@@ -65,7 +71,6 @@ def handle_direct_skill(cmd: str, args: str, signal: SignalClient, sender: str) 
         return True
 
     # Ack instantly, queue the work
-    signal.send(sender, ACK_MESSAGE)
     _work_queue.put(("direct_skill", signal, sender, command, dc, args.strip()))
     return True
 
@@ -240,38 +245,6 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
 
 # ── Message handling ─────────────────────────────────────────────────
 
-def _format_skills_used(result, registry) -> str | None:
-    """Extract which skills were used from an AgentResult."""
-    try:
-        summary = result.metrics.get_summary()
-        tool_usage = summary.get("tool_usage", {})
-        if not tool_usage:
-            return None
-
-        # Build reverse map: tool_function_name → skill_name
-        tool_to_skill = {}
-        for skill in registry.skills:
-            for ref in skill.tools:
-                func_name = ref.split(":")[-1]
-                tool_to_skill[func_name] = skill.name
-
-        skills_used = {}
-        for tool_name in tool_usage:
-            skill_name = tool_to_skill.get(tool_name, None)
-            if skill_name:
-                skills_used.setdefault(skill_name, []).append(tool_name)
-
-        if not skills_used:
-            return None
-
-        parts = []
-        for skill_name, tools in skills_used.items():
-            parts.append(f"{skill_name} ({', '.join(tools)})")
-        return "🧩 Skills used: " + " · ".join(parts)
-    except Exception:
-        return None
-
-
 def _format_debug_info(result) -> str:
     """Extract debug metrics from an AgentResult."""
     try:
@@ -301,7 +274,7 @@ def _format_debug_info(result) -> str:
 def extract_messages(raw: list[dict]) -> list[dict]:
     """Extract messages from Signal API response.
 
-    Returns dicts with: sender, text, attachments, group_id (None for 1:1).
+    Returns dicts with: sender, text, attachments, group_id, mentions, timestamp.
     """
     messages = []
     for envelope_wrapper in raw:
@@ -310,6 +283,8 @@ def extract_messages(raw: list[dict]) -> list[dict]:
         data = envelope.get("dataMessage", {})
         text = data.get("message", "") or ""
         attachments = data.get("attachments", []) or []
+        mentions = data.get("mentions", []) or []
+        timestamp = envelope.get("timestamp") or data.get("timestamp")
 
         # Group messages have groupInfo with groupId
         group_info = data.get("groupInfo", {})
@@ -321,6 +296,8 @@ def extract_messages(raw: list[dict]) -> list[dict]:
                 "text": text,
                 "attachments": attachments,
                 "group_id": group_id,
+                "mentions": mentions,
+                "timestamp": timestamp,
             })
     return messages
 
@@ -340,7 +317,7 @@ def _worker(signal: SignalClient):
             if msg_type == "agent":
                 _, _signal, sender, text = item
                 try:
-                    agent = get_agent()
+                    agent = get_agent_for(sender)
                     result = agent(text)
                     reply = str(result)
                 except Exception as e:
@@ -349,11 +326,6 @@ def _worker(signal: SignalClient):
                     _signal.send(sender, reply)
                     _work_queue.task_done()
                     continue
-
-                # Show which skills were invoked
-                skills_msg = _format_skills_used(result, get_registry())
-                if skills_msg:
-                    _signal.send(sender, skills_msg)
 
                 _signal.send(sender, reply)
                 logger.info("Replied to %s (%d chars)", sender, len(reply))
@@ -428,6 +400,8 @@ def main():
                 text = msg["text"]
                 attachments = msg["attachments"]
                 group_id = msg["group_id"]
+                mentions = msg["mentions"]
+                timestamp = msg["timestamp"]
 
                 # In groups, reply to the group; in 1:1, reply to the sender
                 reply_to = group_id if group_id else sender
@@ -436,19 +410,31 @@ def main():
                     logger.warning("Ignoring message from unauthorized number: %s", sender)
                     continue
 
-                # Group message filtering: only respond to prefix or / commands
+                # Group message filtering: only respond to prefix, mention, or / commands
                 if group_id:
+                    # Buffer every group message for context
+                    if group_id not in _group_history:
+                        _group_history[group_id] = deque(maxlen=_GROUP_HISTORY_MAX)
+                    _group_history[group_id].append((sender, text.strip()))
+
                     prefix = config.signal.group_prefix.lower()
                     text_lower = text.strip().lower()
+                    bot_number = config.signal.number
+                    bot_mentioned = any(
+                        m.get("number") == bot_number or m.get("uuid") == bot_number
+                        for m in mentions
+                    )
+
                     if text_lower.startswith(prefix):
-                        # Strip the prefix and process the rest
                         text = text.strip()[len(prefix):].strip()
                         logger.info("Group %s, from %s (prefix matched): %s", group_id, sender, text[:80])
+                    elif bot_mentioned:
+                        # Strip leading U+FFFC mention character and whitespace
+                        text = re.sub(r"^[\uFFFC\s]+", "", text).strip()
+                        logger.info("Group %s, from %s (mention matched): %s", group_id, sender, text[:80])
                     elif text.strip().startswith("/"):
-                        # Slash commands work in groups without prefix
                         logger.info("Group %s, from %s (command): %s", group_id, sender, text[:80])
                     else:
-                        # Ignore non-prefixed messages in groups
                         continue
 
                 # Transcribe voice messages
@@ -473,19 +459,25 @@ def main():
                     logger.info("Message from %s: %s", sender, text[:80])
 
                 if text.strip().startswith("/"):
-                    # Direct skill invocations (e.g. /summarize, /research)
                     parts = text.strip().split(None, 1)
                     skill_cmd = parts[0]
                     skill_args = parts[1] if len(parts) > 1 else ""
                     if handle_direct_skill(skill_cmd, skill_args, signal, reply_to):
                         continue
 
-                    # Bot control commands (e.g. /model, /help) — instant, no queue
                     if handle_slash_command(text, signal, reply_to):
                         continue
 
-                # Agent messages — ack instantly, queue for sequential processing
-                signal.send(reply_to, ACK_MESSAGE)
+                # Ack with robot emoji reaction, queue for sequential processing
+                signal.react(reply_to, sender, timestamp)
+
+                # Prepend recent group chat so the model has topic context
+                if group_id:
+                    recent = list(_group_history.get(group_id, []))
+                    if len(recent) > 1:
+                        history_lines = "\n".join(f"{s}: {t}" for s, t in recent[:-1])
+                        text = f"[Recent chat in this group]\n{history_lines}\n\n[User asks] {text}"
+
                 _work_queue.put(("agent", signal, reply_to, text))
                 pending = _work_queue.qsize()
                 if pending > 1:
