@@ -76,7 +76,7 @@ _GROUP_HISTORY_MAX = 10
 
 # ── Direct skill invocation (bypasses LLM tool selection) ────────────
 
-def handle_direct_skill(cmd: str, args: str, signal: SignalClient, sender: str) -> bool:
+def handle_direct_skill(cmd: str, args: str, signal: SignalClient, sender: str, images: list | None = None) -> bool:
     """Try to handle a direct skill invocation via registry commands. Returns True if handled."""
     registry = get_registry()
     command = cmd.lower()
@@ -86,13 +86,13 @@ def handle_direct_skill(cmd: str, args: str, signal: SignalClient, sender: str) 
 
     dc = registry.commands[command]
 
-    if dc.arg_name and not args.strip():
+    if dc.arg_name and not args.strip() and not images:
         usage = dc.usage or f"{command} <input>"
         signal.send(sender, f"Usage: {usage}")
         return True
 
     # Ack instantly, queue the work
-    _work_queue.put(("direct_skill", signal, sender, command, dc, args.strip()))
+    _work_queue.put(("direct_skill", signal, sender, command, dc, args.strip(), images or []))
     return True
 
 
@@ -360,10 +360,27 @@ def _worker(signal: SignalClient):
                     _signal.send(sender, debug_msg)
 
             elif msg_type == "direct_skill":
-                _, _signal, sender, command, dc, args = item
+                _, _signal, sender, command, dc, args, images = item
+
+                def _status(msg: str):
+                    _signal.send(sender, msg)
+
                 try:
                     if dc.arg_name:
-                        result = dc.func(**{dc.arg_name: args})
+                        kwargs = {dc.arg_name: args}
+                        if images:
+                            kwargs["images"] = images
+                        kwargs["status_fn"] = _status
+                        try:
+                            result = dc.func(**kwargs)
+                        except TypeError:
+                            # Skill doesn't accept status_fn or images — call without
+                            kwargs.pop("status_fn", None)
+                            kwargs.pop("images", None)
+                            try:
+                                result = dc.func(**{dc.arg_name: args, "images": images})
+                            except TypeError:
+                                result = dc.func(**{dc.arg_name: args})
                     else:
                         result = dc.func()
                     reply = str(result) if result else "(no output)"
@@ -501,7 +518,7 @@ def main():
                     parts = text.strip().split(None, 1)
                     skill_cmd = parts[0]
                     skill_args = parts[1] if len(parts) > 1 else ""
-                    if handle_direct_skill(skill_cmd, skill_args, signal, reply_to):
+                    if handle_direct_skill(skill_cmd, skill_args, signal, reply_to, images=images):
                         continue
 
                     if handle_slash_command(text, signal, reply_to):
