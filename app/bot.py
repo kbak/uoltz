@@ -485,7 +485,8 @@ def main():
                     att = audio_atts[0]
                     att_id = att.get("id", att.get("filename", ""))
                     logger.info("Voice message from %s, attachment: %s", sender, att_id)
-                    signal.send(reply_to, "🎤 Transcribing voice message...")
+                    signal.react(reply_to, sender, timestamp)
+                    signal.react(reply_to, sender, timestamp, "🎤")
                     try:
                         text = download_and_transcribe(cfg_signal.api_url, att_id)
                         signal.send(reply_to, f'📝 Heard: "{text}"')
