@@ -1,6 +1,7 @@
-"""Text-to-speech using Kokoro (local, GPU-accelerated)."""
+"""Text-to-speech using Kokoro ONNX (local, CPU/GPU)."""
 
 import logging
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -9,43 +10,43 @@ import config
 
 logger = logging.getLogger(__name__)
 
-_pipeline = None
+_kokoro = None
+
+_MODEL_DIR = Path(os.getenv("TTS_MODEL_DIR", "/app/kokoro-models"))
+_ONNX_FILE = _MODEL_DIR / "kokoro-v1.0.int8.onnx"
+_VOICES_FILE = _MODEL_DIR / "voices-v1.0.bin"
 
 
-def _get_pipeline():
-    global _pipeline
-    if _pipeline is None:
-        from kokoro import KPipeline
-        cfg = config.tts
-        logger.info("Loading Kokoro TTS pipeline (lang=%s, voice=%s)...", cfg.lang, cfg.voice)
-        _pipeline = KPipeline(lang_code=cfg.lang)
-        logger.info("Kokoro TTS pipeline loaded.")
-    return _pipeline
+def _get_kokoro():
+    global _kokoro
+    if _kokoro is None:
+        from kokoro_onnx import Kokoro
+        providers = os.getenv("TTS_PROVIDERS", "CUDAExecutionProvider,CPUExecutionProvider").split(",")
+        logger.info("Loading Kokoro ONNX model from %s (providers=%s)...", _MODEL_DIR, providers)
+        _kokoro = Kokoro(str(_ONNX_FILE), str(_VOICES_FILE), providers=providers)
+        logger.info("Kokoro ONNX model loaded.")
+    return _kokoro
 
 
 def synthesize(text: str) -> bytes:
     """Synthesize text to OGG/Opus bytes suitable for Signal voice notes."""
-    import numpy as np
     import soundfile as sf
 
     cfg = config.tts
-    pipeline = _get_pipeline()
+    kokoro = _get_kokoro()
 
-    samples = []
-    for _, _, audio in pipeline(text, voice=cfg.voice, speed=cfg.speed):
-        if audio is not None:
-            samples.append(audio)
-
-    if not samples:
-        raise RuntimeError("Kokoro produced no audio")
-
-    audio_np = np.concatenate(samples)
+    samples, sample_rate = kokoro.create(
+        text,
+        voice=cfg.voice,
+        speed=cfg.speed,
+        lang="en-us" if cfg.lang == "a" else "en-gb",
+    )
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_tmp:
         wav_path = wav_tmp.name
 
     try:
-        sf.write(wav_path, audio_np, samplerate=24000)
+        sf.write(wav_path, samples, sample_rate)
 
         with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as ogg_tmp:
             ogg_path = ogg_tmp.name
