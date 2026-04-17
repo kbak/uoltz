@@ -360,7 +360,7 @@ def _worker(signal: SignalClient):
             msg_type = item[0]
 
             if msg_type == "agent":
-                _, _signal, sender, text, images, voice_reply = item
+                _, _signal, sender, text, images, voice_reply, orig_sender, orig_timestamp = item
                 try:
                     agent = get_agent_for(sender)
 
@@ -401,6 +401,7 @@ def _worker(signal: SignalClient):
 
                 if voice_reply and config.tts.enabled:
                     try:
+                        _signal.react(sender, orig_sender, orig_timestamp, "🔊")
                         ogg = tts_module.synthesize(reply)
                         _signal.send_voice(sender, ogg)
                         logger.info("Sent voice reply to %s (%d bytes)", sender, len(ogg))
@@ -589,7 +590,7 @@ def main():
                         history_lines = "\n".join(f"{s}: {t}" for s, t in recent[:-1])
                         text = f"<group_history>\n{history_lines}\n</group_history>\n\n[User asks] {text}"
 
-                _work_queue.put(("agent", signal, reply_to, text, images, is_voice_message))
+                _work_queue.put(("agent", signal, reply_to, text, images, is_voice_message, sender, timestamp))
                 pending = _work_queue.qsize()
                 if pending > 1:
                     signal.send(reply_to, f"📋 Queued (position {pending})")
