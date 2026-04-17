@@ -14,9 +14,6 @@ _kokoro = None
 
 _MODEL_DIR = Path(os.getenv("TTS_MODEL_DIR", "/app/kokoro-models"))
 _VOICES_FILE = _MODEL_DIR / "voices-v1.0.bin"
-_MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "300"))
-
-
 def _get_kokoro():
     global _kokoro
     if _kokoro is None:
@@ -40,9 +37,6 @@ def synthesize(text: str) -> bytes:
 
     cfg = config.tts
     kokoro = _get_kokoro()
-
-    if len(text) > _MAX_CHARS:
-        text = text[:_MAX_CHARS].rsplit(" ", 1)[0] + "…"
 
     samples, sample_rate = kokoro.create(
         text,
