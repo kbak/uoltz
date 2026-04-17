@@ -4,7 +4,7 @@ description: >
   in natural language and it generates the complete skill folder
   (skill.yaml + Python module) ready to use after a restart.
 version: "1.0.0"
-enabled: true
+enabled: false
 
 tools:
   - "builder:create_skill"

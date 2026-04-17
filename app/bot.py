@@ -5,6 +5,7 @@ avoiding thread-safety issues with shared conversation state.
 Ack messages fire instantly; the agent work is serialized.
 """
 
+import asyncio
 import base64
 import queue
 import re
@@ -70,6 +71,17 @@ ACK_MESSAGE = "⏳ Got it, working on it..."
 # Global message queue — the polling loop enqueues, the worker dequeues
 _work_queue: queue.Queue = queue.Queue()
 
+# Agent timeout and stop support
+AGENT_TIMEOUT = 60  # seconds
+
+# A dedicated event loop running in its own thread so we can create
+# cancellable asyncio Tasks for each agent call.
+_agent_loop = asyncio.new_event_loop()
+threading.Thread(target=_agent_loop.run_forever, daemon=True, name="agent-loop").start()
+
+_current_task: list[asyncio.Task | None] = [None]  # mutable container for cross-scope writes
+_current_task_lock = threading.Lock()
+
 # Per-group recent message buffer for topic context
 _group_history: dict[str, deque] = {}
 _GROUP_HISTORY_MAX = 10
@@ -105,6 +117,16 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
     arg1 = parts[1].lower() if len(parts) > 1 else ""
     arg2 = parts[2] if len(parts) > 2 else ""
 
+    if command == "/stop":
+        with _current_task_lock:
+            task = _current_task[0]
+        if task and not task.done():
+            _agent_loop.call_soon_threadsafe(task.cancel)
+            signal.send(sender, "🛑 Stopping current query...")
+        else:
+            signal.send(sender, "Nothing is running.")
+        return True
+
     if command == "/help":
         registry = get_registry()
         cmd_help = registry.commands_help()
@@ -114,6 +136,7 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
             f"{skill_section}"
             f"Bot controls:\n"
             "  /help  —  Show this message\n"
+            "  /stop  —  Cancel the current running query\n"
             "  /model  —  Show current model info\n"
             "  /model list  —  List available models\n"
             "  /model load <name|#>  —  Switch model\n"
@@ -339,12 +362,32 @@ def _worker(signal: SignalClient):
                 _, _signal, sender, text, images = item
                 try:
                     agent = get_agent_for(sender)
-                    if images:
-                        content = [{"type": "text", "text": text}] + images
-                        result = agent(content)
-                    else:
-                        result = agent(text)
-                    reply = str(result)
+
+                    async def _run_agent():
+                        if images:
+                            content = [{"type": "text", "text": text}] + images
+                            return await agent.invoke_async(content)
+                        return await agent.invoke_async(text)
+
+                    async def _run_with_registration():
+                        with _current_task_lock:
+                            _current_task[0] = asyncio.current_task()
+                        try:
+                            return await asyncio.wait_for(_run_agent(), timeout=AGENT_TIMEOUT)
+                        finally:
+                            with _current_task_lock:
+                                _current_task[0] = None
+
+                    future = asyncio.run_coroutine_threadsafe(_run_with_registration(), _agent_loop)
+                    try:
+                        result = future.result()
+                        reply = str(result)
+                    except asyncio.TimeoutError:
+                        logger.warning("Agent timed out for %s after %ds", sender, AGENT_TIMEOUT)
+                        reply = f"⏱️ Timed out after {AGENT_TIMEOUT}s."
+                    except asyncio.CancelledError:
+                        logger.info("Agent cancelled for %s", sender)
+                        reply = "🛑 Stopped."
                 except Exception as e:
                     logger.exception("Agent error for %s", sender)
                     reply = f"Sorry, I hit an error: {e}"
