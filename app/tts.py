@@ -21,9 +21,8 @@ def _get_kokoro():
     global _kokoro
     if _kokoro is None:
         from kokoro_onnx import Kokoro
-        providers = os.getenv("TTS_PROVIDERS", "CUDAExecutionProvider,CPUExecutionProvider").split(",")
-        logger.info("Loading Kokoro ONNX model from %s (providers=%s)...", _MODEL_DIR, providers)
-        _kokoro = Kokoro(str(_ONNX_FILE), str(_VOICES_FILE), providers=providers)
+        logger.info("Loading Kokoro ONNX model from %s...", _MODEL_DIR)
+        _kokoro = Kokoro(str(_ONNX_FILE), str(_VOICES_FILE))
         logger.info("Kokoro ONNX model loaded.")
     return _kokoro
 
