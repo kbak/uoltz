@@ -15,13 +15,18 @@ _kokoro = None
 _MODEL_DIR = Path(os.getenv("TTS_MODEL_DIR", "/app/kokoro-models"))
 _ONNX_FILE = _MODEL_DIR / "kokoro-v1.0.int8.onnx"
 _VOICES_FILE = _MODEL_DIR / "voices-v1.0.bin"
+_MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "300"))
 
 
 def _get_kokoro():
     global _kokoro
     if _kokoro is None:
+        import onnxruntime as ort
         from kokoro_onnx import Kokoro
-        logger.info("Loading Kokoro ONNX model from %s...", _MODEL_DIR)
+        available = ort.get_available_providers()
+        providers = [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in available]
+        logger.info("Loading Kokoro ONNX model (providers=%s)...", providers)
+        os.environ["ONNX_PROVIDER"] = providers[0]
         _kokoro = Kokoro(str(_ONNX_FILE), str(_VOICES_FILE))
         logger.info("Kokoro ONNX model loaded.")
     return _kokoro
@@ -33,6 +38,9 @@ def synthesize(text: str) -> bytes:
 
     cfg = config.tts
     kokoro = _get_kokoro()
+
+    if len(text) > _MAX_CHARS:
+        text = text[:_MAX_CHARS].rsplit(" ", 1)[0] + "…"
 
     samples, sample_rate = kokoro.create(
         text,
