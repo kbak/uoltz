@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 _kokoro = None
 
 _MODEL_DIR = Path(os.getenv("TTS_MODEL_DIR", "/app/kokoro-models"))
-_ONNX_FILE = _MODEL_DIR / "kokoro-v1.0.int8.onnx"
 _VOICES_FILE = _MODEL_DIR / "voices-v1.0.bin"
 _MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "300"))
 
@@ -24,10 +23,13 @@ def _get_kokoro():
         import onnxruntime as ort
         from kokoro_onnx import Kokoro
         available = ort.get_available_providers()
-        providers = [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in available]
-        logger.info("Loading Kokoro ONNX model (providers=%s)...", providers)
-        os.environ["ONNX_PROVIDER"] = providers[0]
-        _kokoro = Kokoro(str(_ONNX_FILE), str(_VOICES_FILE))
+        use_cuda = "CUDAExecutionProvider" in available
+        provider = "CUDAExecutionProvider" if use_cuda else "CPUExecutionProvider"
+        # fp16 is 14x faster on GPU; int8 is better for CPU
+        model_file = _MODEL_DIR / ("kokoro-v1.0.fp16.onnx" if use_cuda else "kokoro-v1.0.int8.onnx")
+        os.environ["ONNX_PROVIDER"] = provider
+        logger.info("Loading Kokoro ONNX model %s (provider=%s)...", model_file.name, provider)
+        _kokoro = Kokoro(str(model_file), str(_VOICES_FILE))
         logger.info("Kokoro ONNX model loaded.")
     return _kokoro
 
