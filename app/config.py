@@ -40,6 +40,15 @@ class WhisperConfig:
 
 
 @dataclass(frozen=True)
+class TTSConfig:
+    """Text-to-speech configuration."""
+    enabled: bool = field(default_factory=lambda: os.getenv("TTS_ENABLED", "true").lower() == "true")
+    voice: str = field(default_factory=lambda: os.getenv("TTS_VOICE", "af_heart"))
+    lang: str = field(default_factory=lambda: os.getenv("TTS_LANG", "a"))
+    speed: float = field(default_factory=lambda: float(os.getenv("TTS_SPEED", "1.0")))
+
+
+@dataclass(frozen=True)
 class FreshRSSConfig:
     """FreshRSS configuration."""
     url: str = field(default_factory=lambda: os.getenv("FRESHRSS_URL", ""))
@@ -58,6 +67,7 @@ def _parse_allowed() -> frozenset[str]:
 llm = LLMConfig()
 signal = SignalConfig()
 whisper = WhisperConfig()
+tts = TTSConfig()
 freshrss = FreshRSSConfig()
 
 

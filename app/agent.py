@@ -140,6 +140,39 @@ def refresh_system_prompt():
             agent.system_prompt = prompt
 
 
+def ensure_model_loaded(model_id: str | None = None) -> bool:
+    """Ensure the model is loaded on the LLM server, loading it if necessary.
+
+    Returns True if the model is ready, False on failure.
+    """
+    mid = model_id or config.llm.model_id
+
+    try:
+        resp = httpx.get(f"{config.llm.base_url}/models", timeout=10)
+        resp.raise_for_status()
+        loaded = [m["id"] for m in resp.json().get("data", [])]
+        if mid in loaded:
+            logger.debug("Model '%s' already loaded", mid)
+            return True
+    except Exception as e:
+        logger.warning("Could not check loaded models: %s", e)
+
+    logger.info("Model '%s' not loaded, triggering load...", mid)
+    api = _lmstudio_api_base()
+    try:
+        resp = httpx.post(
+            f"{api}/api/v1/models/load",
+            json={"model": mid},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        logger.info("Model '%s' loaded successfully", mid)
+        return True
+    except Exception as e:
+        logger.error("Failed to load model '%s': %s", mid, e)
+        return False
+
+
 def list_available_models() -> list[str]:
     """Query the LLM server for available models."""
     try:

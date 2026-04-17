@@ -29,6 +29,7 @@ from agent import (
 )
 from skills import SkillRegistry
 from transcribe import download_and_transcribe, AUDIO_CONTENT_TYPES
+import tts as tts_module
 
 IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
@@ -359,7 +360,7 @@ def _worker(signal: SignalClient):
             msg_type = item[0]
 
             if msg_type == "agent":
-                _, _signal, sender, text, images = item
+                _, _signal, sender, text, images, voice_reply = item
                 try:
                     agent = get_agent_for(sender)
 
@@ -397,6 +398,14 @@ def _worker(signal: SignalClient):
 
                 _signal.send(sender, reply)
                 logger.info("Replied to %s (%d chars)", sender, len(reply))
+
+                if voice_reply and config.tts.enabled:
+                    try:
+                        ogg = tts_module.synthesize(reply)
+                        _signal.send_voice(sender, ogg)
+                        logger.info("Sent voice reply to %s (%d bytes)", sender, len(ogg))
+                    except Exception:
+                        logger.exception("TTS failed for %s", sender)
 
                 if state.debug:
                     debug_msg = _format_debug_info(result)
@@ -524,6 +533,7 @@ def main():
 
                 # Transcribe voice messages
                 audio_atts = [a for a in attachments if a.get("contentType", "") in AUDIO_CONTENT_TYPES]
+                is_voice_message = False
                 if audio_atts and not text:
                     att = audio_atts[0]
                     att_id = att.get("id", att.get("filename", ""))
@@ -533,6 +543,7 @@ def main():
                     try:
                         text = download_and_transcribe(cfg_signal.api_url, att_id)
                         signal.send(reply_to, f'📝 Heard: "{text}"')
+                        is_voice_message = True
                     except Exception as e:
                         logger.exception("Transcription failed")
                         signal.send(reply_to, f"Failed to transcribe voice message: {e}")
@@ -578,7 +589,7 @@ def main():
                         history_lines = "\n".join(f"{s}: {t}" for s, t in recent[:-1])
                         text = f"<group_history>\n{history_lines}\n</group_history>\n\n[User asks] {text}"
 
-                _work_queue.put(("agent", signal, reply_to, text, images))
+                _work_queue.put(("agent", signal, reply_to, text, images, is_voice_message))
                 pending = _work_queue.qsize()
                 if pending > 1:
                     signal.send(reply_to, f"📋 Queued (position {pending})")

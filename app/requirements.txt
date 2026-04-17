@@ -7,3 +7,5 @@ ddgs
 faster-whisper
 croniter
 yt-dlp
+kokoro
+soundfile

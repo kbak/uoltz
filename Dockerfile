@@ -1,8 +1,8 @@
 FROM python:3.13-slim
 
-# ffmpeg is needed for whisper audio transcription
+# ffmpeg: audio transcription/encoding; espeak-ng: Kokoro TTS phonemization
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
+    apt-get install -y --no-install-recommends ffmpeg espeak-ng && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

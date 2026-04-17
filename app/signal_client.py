@@ -1,5 +1,6 @@
 """Thin client for the signal-cli-rest-api with retry logic."""
 
+import base64
 import time
 import httpx
 import logging
@@ -108,6 +109,27 @@ class SignalClient:
             if isinstance(result, Exception):
                 return False
         return True
+
+    # ── Send voice ───────────────────────────────────────────
+    def send_voice(self, recipient: str, ogg_bytes: bytes) -> bool:
+        """Send an OGG/Opus voice note attachment."""
+        encoded = base64.standard_b64encode(ogg_bytes).decode()
+
+        def _do():
+            resp = self._http.post(
+                "/v2/send",
+                json={
+                    "message": "",
+                    "number": self.number,
+                    "recipients": [self._resolve_group_id(recipient)],
+                    "base64_attachments": [f"data:audio/ogg;filename=voice.ogg;base64,{encoded}"],
+                },
+            )
+            resp.raise_for_status()
+            return True
+
+        result = self._retry("send_voice", _do)
+        return not isinstance(result, Exception)
 
     # ── Health ───────────────────────────────────────────────
     def is_healthy(self) -> bool:
