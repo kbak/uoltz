@@ -576,7 +576,7 @@ def main():
                     recent = list(_group_history.get(group_id, []))
                     if len(recent) > 1:
                         history_lines = "\n".join(f"{s}: {t}" for s, t in recent[:-1])
-                        text = f"[Recent chat in this group]\n{history_lines}\n\n[User asks] {text}"
+                        text = f"<group_history>\n{history_lines}\n</group_history>\n\n[User asks] {text}"
 
                 _work_queue.put(("agent", signal, reply_to, text, images))
                 pending = _work_queue.qsize()
