@@ -561,6 +561,23 @@ def main():
     create_agent()
     registry = get_registry()
 
+    # Warm up local models in the background so the first voice message is fast.
+    # Runs after create_agent() so qwen (loaded by start.sh before this container)
+    # already occupies its VRAM slice; whisper + kokoro load into what remains.
+    def _warmup_models():
+        try:
+            import transcribe
+            transcribe.warmup()
+        except Exception:
+            logger.exception("Whisper warmup failed")
+        if config.tts.enabled:
+            try:
+                tts_module.warmup()
+            except Exception:
+                logger.exception("Kokoro warmup failed")
+
+    threading.Thread(target=_warmup_models, daemon=True, name="model-warmup").start()
+
     logger.info(
         "Bot is running with %d skill(s), %d tool(s). Polling every %ds...",
         len(registry.skills), len(registry.tools), POLL_INTERVAL,

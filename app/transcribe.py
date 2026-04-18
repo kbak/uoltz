@@ -28,6 +28,11 @@ def _get_model() -> WhisperModel:
     return _model
 
 
+def warmup() -> None:
+    """Eagerly load the Whisper model so the first transcription isn't slow."""
+    _get_model()
+
+
 def transcribe_audio(audio_path: str) -> str:
     """Transcribe an audio file to text."""
     model = _get_model()

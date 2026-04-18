@@ -31,6 +31,11 @@ def _get_kokoro():
     return _kokoro
 
 
+def warmup() -> None:
+    """Eagerly load the Kokoro model so the first synthesis isn't slow."""
+    _get_kokoro()
+
+
 def synthesize(text: str) -> bytes:
     """Synthesize text to OGG/Opus bytes suitable for Signal voice notes."""
     import soundfile as sf
