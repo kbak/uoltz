@@ -32,16 +32,14 @@ class SignalConfig:
 
 
 @dataclass(frozen=True)
-class WhisperConfig:
-    """Voice transcription configuration."""
-    model_size: str = field(default_factory=lambda: os.getenv("WHISPER_MODEL", "base"))
-    device: str = field(default_factory=lambda: os.getenv("WHISPER_DEVICE", "cpu"))
-    compute_type: str = field(default_factory=lambda: os.getenv("WHISPER_COMPUTE_TYPE", "int8"))
+class AudioAPIConfig:
+    """Remote audio service (Whisper STT + Kokoro TTS)."""
+    url: str = field(default_factory=lambda: os.getenv("AUDIO_API_URL", "http://audio-api:8088"))
 
 
 @dataclass(frozen=True)
 class TTSConfig:
-    """Text-to-speech configuration."""
+    """Text-to-speech configuration (sent to audio-api per request)."""
     enabled: bool = field(default_factory=lambda: os.getenv("TTS_ENABLED", "true").lower() == "true")
     voice: str = field(default_factory=lambda: os.getenv("TTS_VOICE", "af_heart"))
     lang: str = field(default_factory=lambda: os.getenv("TTS_LANG", "a"))
@@ -66,7 +64,7 @@ def _parse_allowed() -> frozenset[str]:
 # Singletons — created once at import time
 llm = LLMConfig()
 signal = SignalConfig()
-whisper = WhisperConfig()
+audio_api = AudioAPIConfig()
 tts = TTSConfig()
 freshrss = FreshRSSConfig()
 

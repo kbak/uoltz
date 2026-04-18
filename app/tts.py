@@ -1,77 +1,38 @@
-"""Text-to-speech using Kokoro ONNX (local, CPU/GPU)."""
+"""Text-to-speech via the audio-api service (Kokoro under the hood)."""
 
 import logging
-import os
-import subprocess
-import tempfile
-from pathlib import Path
+
+import httpx
 
 import config
 
 logger = logging.getLogger(__name__)
 
-_kokoro = None
-
-_MODEL_DIR = Path(os.getenv("TTS_MODEL_DIR", "/app/kokoro-models"))
-_VOICES_FILE = _MODEL_DIR / "voices-v1.0.bin"
-def _get_kokoro():
-    global _kokoro
-    if _kokoro is None:
-        import onnxruntime as ort
-        from kokoro_onnx import Kokoro
-        available = ort.get_available_providers()
-        use_cuda = "CUDAExecutionProvider" in available
-        provider = "CUDAExecutionProvider" if use_cuda else "CPUExecutionProvider"
-        # fp16 is 14x faster on GPU; int8 is better for CPU
-        model_file = _MODEL_DIR / ("kokoro-v1.0.fp16.onnx" if use_cuda else "kokoro-v1.0.int8.onnx")
-        os.environ["ONNX_PROVIDER"] = provider
-        logger.info("Loading Kokoro ONNX model %s (provider=%s)...", model_file.name, provider)
-        _kokoro = Kokoro(str(model_file), str(_VOICES_FILE))
-        logger.info("Kokoro ONNX model loaded.")
-    return _kokoro
-
 
 def warmup() -> None:
-    """Eagerly load the Kokoro model so the first synthesis isn't slow."""
-    _get_kokoro()
+    """No-op: audio-api loads its own models at startup. Left in place
+    so bot.py's existing warmup call continues to work."""
+    url = f"{config.audio_api.url.rstrip('/')}/health"
+    try:
+        resp = httpx.get(url, timeout=10)
+        if resp.status_code != 200:
+            logger.warning("audio-api TTS not ready (status=%s)", resp.status_code)
+    except Exception:
+        logger.exception("audio-api health check failed at %s", url)
 
 
 def synthesize(text: str) -> bytes:
     """Synthesize text to OGG/Opus bytes suitable for Signal voice notes."""
-    import soundfile as sf
-
     cfg = config.tts
-    kokoro = _get_kokoro()
-
-    samples, sample_rate = kokoro.create(
-        text,
-        voice=cfg.voice,
-        speed=cfg.speed,
-        lang="en-us" if cfg.lang == "a" else "en-gb",
-    )
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_tmp:
-        wav_path = wav_tmp.name
-
-    try:
-        sf.write(wav_path, samples, sample_rate)
-
-        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as ogg_tmp:
-            ogg_path = ogg_tmp.name
-
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg", "-y", "-i", wav_path,
-                    "-c:a", "libopus", "-b:a", "24k",
-                    "-vbr", "on", "-application", "voip",
-                    ogg_path,
-                ],
-                check=True,
-                capture_output=True,
-            )
-            return Path(ogg_path).read_bytes()
-        finally:
-            Path(ogg_path).unlink(missing_ok=True)
-    finally:
-        Path(wav_path).unlink(missing_ok=True)
+    url = f"{config.audio_api.url.rstrip('/')}/v1/audio/speech"
+    payload = {
+        "model": "kokoro",
+        "input": text,
+        "voice": cfg.voice,
+        "lang": cfg.lang,
+        "speed": cfg.speed,
+        "response_format": "ogg",
+    }
+    resp = httpx.post(url, json=payload, timeout=120)
+    resp.raise_for_status()
+    return resp.content

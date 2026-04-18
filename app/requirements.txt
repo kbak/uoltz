@@ -4,8 +4,5 @@ httpx
 python-dotenv
 pyyaml
 ddgs
-faster-whisper
 croniter
 yt-dlp
-kokoro-onnx
-soundfile
