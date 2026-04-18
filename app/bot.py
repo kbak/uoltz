@@ -132,7 +132,9 @@ _current_task_lock = threading.Lock()
 
 # Per-group recent message buffer for topic context
 _group_history: dict[str, deque] = {}
-_GROUP_HISTORY_MAX = 10
+_group_history_count: dict[str, int] = {}  # total messages ever appended, per group
+_group_last_seen: dict[str, int] = {}      # count at last bot interaction, per group
+_GROUP_HISTORY_MAX = 30
 
 # ── Direct skill invocation (bypasses LLM tool selection) ────────────
 
@@ -557,7 +559,9 @@ def main():
                     # Buffer every group message for context
                     if group_id not in _group_history:
                         _group_history[group_id] = deque(maxlen=_GROUP_HISTORY_MAX)
+                        _group_history_count[group_id] = 0
                     _group_history[group_id].append((sender, text.strip()))
+                    _group_history_count[group_id] += 1
 
                     prefix = config.signal.group_prefix.lower()
                     text_lower = text.strip().lower()
@@ -597,6 +601,7 @@ def main():
                         # Backfill the group history entry (was added with empty text before transcription)
                         if group_id and _group_history.get(group_id):
                             _group_history[group_id][-1] = (sender, text)
+                            # count was already incremented at append time, no change needed
                     except Exception as e:
                         logger.exception("Transcription failed")
                         signal.send(reply_to, f"Failed to transcribe voice message: {e}")
@@ -651,12 +656,18 @@ def main():
                 # Ack with robot emoji reaction, queue for sequential processing
                 signal.react(reply_to, sender, timestamp)
 
-                # Prepend recent group chat so the model has topic context
+                # Prepend group messages the bot hasn't seen yet (since last interaction)
                 if group_id:
-                    recent = list(_group_history.get(group_id, []))
-                    if len(recent) > 1:
-                        history_lines = "\n".join(f"{s}: {t}" for s, t in recent[:-1])
-                        text = f"<group_history>\n{history_lines}\n</group_history>\n\n[User asks] {text}"
+                    total = _group_history_count.get(group_id, 0)
+                    last_seen = _group_last_seen.get(group_id, 0)
+                    unseen_count = total - last_seen - 1  # exclude current message
+                    if unseen_count > 0:
+                        recent = list(_group_history.get(group_id, []))
+                        unseen = recent[-unseen_count - 1:-1]  # messages since last interaction
+                        if unseen:
+                            history_lines = "\n".join(f"{s}: {t}" for s, t in unseen)
+                            text = f"<group_history>\n{history_lines}\n</group_history>\n\n[User asks] {text}"
+                    _group_last_seen[group_id] = total
 
                 _work_queue.put(("agent", signal, reply_to, text, images, is_voice_message, sender, timestamp))
                 pending = _work_queue.qsize()
