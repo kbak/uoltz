@@ -177,6 +177,42 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
             signal.send(sender, "Nothing is running.")
         return True
 
+    if command == "/history":
+        from agent import _agents
+        try:
+            n = int(arg1) if arg1 else 10
+        except ValueError:
+            n = 10
+        agent = _agents.get(sender)
+        if not agent or not hasattr(agent, "messages") or not agent.messages:
+            signal.send(sender, "No agent history for this chat yet.")
+            return True
+        msgs = agent.messages[-n:]
+        lines = [f"🧠 Agent history (last {len(msgs)}/{len(agent.messages)} msgs):\n"]
+        for i, m in enumerate(msgs, 1):
+            role = m.get("role", "?") if isinstance(m, dict) else getattr(m, "role", "?")
+            content = m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
+            # content can be a string or a list of blocks
+            if isinstance(content, list):
+                parts = []
+                for c in content:
+                    if isinstance(c, dict):
+                        if c.get("type") == "text":
+                            parts.append(c.get("text", ""))
+                        elif "text" in c:
+                            parts.append(str(c["text"]))
+                        else:
+                            parts.append(f"[{c.get('type', 'block')}]")
+                    else:
+                        parts.append(str(c))
+                content_str = " ".join(parts)
+            else:
+                content_str = str(content)
+            snippet = content_str.replace("\n", " ⏎ ")[:400]
+            lines.append(f"[{i}] {role}: {snippet}")
+        signal.send(sender, "\n\n".join(lines))
+        return True
+
     if command == "/help":
         registry = get_registry()
         cmd_help = registry.commands_help()
@@ -187,6 +223,7 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
             f"Bot controls:\n"
             "  /help  —  Show this message\n"
             "  /stop  —  Cancel the current running query\n"
+            "  /history [n]  —  Show last n messages of agent history (default 10)\n"
             "  /model  —  Show current model info\n"
             "  /model list  —  List available models\n"
             "  /model load <name|#>  —  Switch model\n"
