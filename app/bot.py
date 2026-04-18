@@ -33,6 +33,53 @@ import tts as tts_module
 
 IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
+# Spoken-digit maps for building voice wake-word patterns
+_DIGIT_SPOKEN = {
+    "0": r"(?:zero|o+|oh+|nought)",
+    "1": r"(?:one)",
+    "2": r"(?:two)",
+    "3": r"(?:three)",
+    "4": r"(?:four)",
+    "5": r"(?:five)",
+    "6": r"(?:six)",
+    "7": r"(?:seven)",
+    "8": r"(?:eight)",
+    "9": r"(?:nine)",
+}
+_SEP = r"[\s\-,]*"  # optional separator between spoken digits
+
+def _build_wake_pattern(bot_name: str) -> str:
+    """Build a regex that matches the bot name spoken aloud.
+
+    E.g. "006" matches: 006, zero zero six, double-o six, o-o-six, oh oh six, etc.
+    Falls back to a literal match for names with no digit map.
+    """
+    digits = list(bot_name)
+
+    # Handle "double-X" shorthand for repeated leading digits
+    # e.g. "006" → also match "double o/oh/zero six"
+    spoken_parts = [_DIGIT_SPOKEN.get(d, re.escape(d)) for d in digits]
+
+    # Build the digit-by-digit pattern
+    sequential = _SEP.join(spoken_parts)
+
+    # Also allow "double <x> <y>" for a leading pair like "00"
+    extras = []
+    if len(digits) >= 2 and digits[0] == digits[1]:
+        rest_spoken = _SEP.join(spoken_parts[2:]) if len(spoken_parts) > 2 else ""
+        double_x = _DIGIT_SPOKEN.get(digits[0], re.escape(digits[0]))
+        double_part = rf"double[\s\-]*{double_x}"
+        if rest_spoken:
+            extras.append(double_part + _SEP + rest_spoken)
+        else:
+            extras.append(double_part)
+
+    # Literal digits as fallback (e.g. someone types "006" in a voice transcription)
+    literal = re.escape(bot_name)
+
+    alts = [sequential, literal] + extras
+    return r"(?:hey\s+)?(?:" + "|".join(alts) + r")(?:\s*[,.]?)?"
+
 
 def _fetch_image_b64(signal_api_url: str, attachment_id: str, content_type: str) -> dict | None:
     """Download an image attachment and return an OpenAI-compatible image content block."""
@@ -505,7 +552,7 @@ def main():
                     logger.warning("Ignoring message from unauthorized number: %s", sender)
                     continue
 
-                # Group message filtering: only respond to prefix, mention, or / commands
+                # Group message filtering: only respond to prefix, mention, voice wake-word, or / commands
                 if group_id:
                     # Buffer every group message for context
                     if group_id not in _group_history:
@@ -519,6 +566,7 @@ def main():
                         m.get("number") == bot_number or m.get("uuid") == bot_number
                         for m in mentions
                     )
+                    has_audio = any(a.get("contentType", "") in AUDIO_CONTENT_TYPES for a in attachments)
 
                     if text_lower.startswith(prefix):
                         text = text.strip()[len(prefix):].strip()
@@ -529,6 +577,8 @@ def main():
                         logger.info("Group %s, from %s (mention matched): %s", group_id, sender, text[:80])
                     elif text.strip().startswith("/"):
                         logger.info("Group %s, from %s (command): %s", group_id, sender, text[:80])
+                    elif has_audio:
+                        pass  # defer decision until after transcription — wake-word check below
                     else:
                         continue
 
@@ -543,12 +593,30 @@ def main():
                     signal.react(reply_to, sender, timestamp, "🎤")
                     try:
                         text = download_and_transcribe(cfg_signal.api_url, att_id)
-                        signal.send(reply_to, f'📝 Heard: "{text}"')
                         is_voice_message = True
+                        # Backfill the group history entry (was added with empty text before transcription)
+                        if group_id and _group_history.get(group_id):
+                            _group_history[group_id][-1] = (sender, text)
                     except Exception as e:
                         logger.exception("Transcription failed")
                         signal.send(reply_to, f"Failed to transcribe voice message: {e}")
                         continue
+
+                    # In groups, require a voice wake word — drop silently if absent
+                    if group_id:
+                        bot_name = config.signal.bot_name  # e.g. "006"
+                        # Build spoken variants: "006" → zero-zero-six, double-o-six, o-o-six, oh-oh-six, etc.
+                        wake_pattern = _build_wake_pattern(bot_name)
+                        m = re.search(wake_pattern, text, re.IGNORECASE)
+                        if m:
+                            # Strip the wake word and any surrounding punctuation/whitespace
+                            text = (text[:m.start()] + text[m.end():]).strip().lstrip(",. ")
+                            logger.info("Group %s, from %s (voice wake-word): %s", group_id, sender, text[:80])
+                        else:
+                            logger.debug("Group %s: voice message without wake word, ignoring", group_id)
+                            continue
+                    else:
+                        signal.send(reply_to, f'📝 Heard: "{text}"')
 
                 # Fetch image attachments for vision-capable model
                 image_atts = [a for a in attachments if a.get("contentType", "") in IMAGE_CONTENT_TYPES]
