@@ -587,6 +587,13 @@ def main():
                 # In groups, reply to the group; in 1:1, reply to the sender
                 reply_to = group_id if group_id else sender
 
+                # Diagnostic: log every incoming envelope before any filtering
+                att_types = [a.get("contentType", "?") for a in attachments]
+                logger.info(
+                    "RX from=%s group=%s text=%r atts=%s mentions=%d",
+                    sender, group_id or "(dm)", text[:60], att_types, len(mentions),
+                )
+
                 if allowed and sender not in allowed:
                     logger.warning("Ignoring message from unauthorized number: %s", sender)
                     continue
@@ -655,7 +662,7 @@ def main():
                             text = (text[:m.start()] + text[m.end():]).strip().lstrip(",. ")
                             logger.info("Group %s, from %s (voice wake-word): %s", group_id, sender, text[:80])
                         else:
-                            logger.debug("Group %s: voice message without wake word, ignoring", group_id)
+                            logger.info("Group %s: voice message without wake word (transcript=%r), ignoring", group_id, text[:80])
                             continue
                     else:
                         signal.send(reply_to, f'📝 Heard: "{text}"')
