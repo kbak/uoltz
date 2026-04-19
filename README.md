@@ -7,8 +7,8 @@ A local-first AI chatbot for [Signal](https://signal.org/) messenger with plugga
 - **100% local** — your LLM, your data, no cloud APIs required
 - **Any OpenAI-compatible backend** — LM Studio, Ollama, vLLM, llama.cpp
 - **Pluggable skill system** — drop a folder in `app/skills/`, restart, done
-- **Voice messages in** — automatic transcription via local Whisper (faster-whisper)
-- **Voice messages out** — bot replies with a voice note after every text reply to your voice message (Kokoro TTS)
+- **Voice messages in** — automatic transcription via a remote OpenAI-compatible STT service (e.g. [audio-api](https://github.com/kbak/Stack) — a shared Whisper/Kokoro GPU service)
+- **Voice messages out** — bot replies with a voice note after every text reply to your voice message, synthesized by the same audio service (Kokoro TTS)
 - **Image understanding** — send a photo and the bot describes or analyzes it
 - **Multi-agent brainstorming** — domain-aware parallel ideation with fact-checking, YouTube video analysis, RSS feed context, prior brainstorm awareness, and confidence-scored reports via Strands Agents Graph pattern
 - **Real-time research** — web + news search with AI synthesis
@@ -40,10 +40,9 @@ The setup scripts check for these automatically and will install what they can:
 
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/) (for host mode)
 - Docker or Finch (for container mode and signal-api)
-- `ffmpeg` (for voice transcription and TTS encoding)
-- `espeak-ng` (for Kokoro TTS phonemization — installed automatically in Docker)
 - `curl`
 - An OpenAI-compatible LLM server ([LM Studio](https://lmstudio.ai), [Ollama](https://ollama.ai), etc.)
+- **Optional** — an OpenAI-compatible audio service for voice messages in/out. This fork is wired to call `AUDIO_API_URL` for both STT (`/v1/audio/transcriptions`) and TTS (`/v1/audio/speech`). Point it at your own Whisper/Kokoro deployment (e.g. [audio-api](https://github.com/kbak/Stack)) or any compatible endpoint.
 
 ### 1. Clone and configure
 
@@ -174,39 +173,28 @@ Send a voice note to the bot and it will:
 3. Process the transcribed text through the agent
 4. Reply in text, then send a voice note back
 
-Transcription runs locally via [faster-whisper](https://github.com/SYSTRAN/faster-whisper). Configure in `.env`:
+Transcription is delegated to an OpenAI-compatible audio service via `POST {AUDIO_API_URL}/v1/audio/transcriptions`. Configure in `.env`:
 
 ```env
-WHISPER_MODEL=small          # tiny, base, small, medium, large-v3
-WHISPER_DEVICE=cpu
-WHISPER_COMPUTE_TYPE=int8    # int8 recommended for CPU
+AUDIO_API_URL=http://audio-api:8088     # any OpenAI-compatible STT endpoint
 ```
+
+The bot no longer bundles Whisper, ffmpeg, or espeak-ng — all model/runtime dependencies live in the remote audio service. This keeps the container small (~1.5 GB RAM, no GPU) and decouples STT/TTS scaling from bot lifecycle.
 
 ### Outgoing (Text-to-Speech)
 
-After every reply to a voice message, the bot synthesizes a voice note using [Kokoro](https://github.com/hexgrad/kokoro) and sends it back. Kokoro runs entirely locally (~165 MB model) and supports GPU acceleration.
+After every reply to a voice message, the bot requests synthesis via `POST {AUDIO_API_URL}/v1/audio/speech` and sends the returned OGG/Opus audio as a Signal voice note.
 
 Configure in `.env`:
 
 ```env
 TTS_ENABLED=true
-TTS_VOICE=af_heart           # see voice options below
-TTS_LANG=a                   # a=en-US, b=en-GB
+TTS_VOICE=am_onyx            # any voice the audio service exposes via /v1/voices
+TTS_LANG=a                   # a=en-US, b=en-GB (Kokoro convention)
 TTS_SPEED=1.0
 ```
 
-Available voices:
-
-| Voice | Gender | Accent |
-|-------|--------|--------|
-| `af_heart` | Female | American (warm, default) |
-| `af_bella` | Female | American |
-| `am_adam` | Male | American |
-| `am_michael` | Male | American |
-| `bf_emma` | Female | British |
-| `bm_george` | Male | British |
-
-Set `TTS_ENABLED=false` to disable voice replies without removing the feature.
+`TTS_VOICE`, `TTS_LANG`, and `TTS_SPEED` are forwarded per-request, so you can swap voices without touching the audio service. Set `TTS_ENABLED=false` to disable voice replies.
 
 ## Image Understanding
 
@@ -237,8 +225,8 @@ signal-agent/
 │   ├── config.py               # Centralized config from .env
 │   ├── runtime.py              # Mutable runtime state (toggles)
 │   ├── signal_client.py        # Signal REST API client (text + voice send)
-│   ├── transcribe.py           # Whisper voice transcription (STT)
-│   ├── tts.py                  # Kokoro voice synthesis (TTS)
+│   ├── transcribe.py           # Thin HTTP client for the remote STT endpoint
+│   ├── tts.py                  # Thin HTTP client for the remote TTS endpoint
 │   ├── scheduler.py            # Proactive cron-based job scheduler
 │   ├── requirements.txt
 │   └── skills/                 # Auto-discovered skill plugins
@@ -293,8 +281,7 @@ Pick a model with tool/function-calling support for best results (e.g. Qwen 2.5,
 
 - [Strands Agents](https://strandsagents.com/) — agent framework with multi-agent patterns
 - [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) — Signal messenger REST API
-- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — local speech-to-text via CTranslate2
-- [Kokoro](https://github.com/hexgrad/kokoro) — local text-to-speech (~165 MB, GPU-accelerated)
+- Any OpenAI-compatible audio service for STT/TTS (Whisper + Kokoro recommended — e.g. [audio-api](https://github.com/kbak/Stack))
 - [DuckDuckGo Search](https://github.com/deedy5/ddgs) — web search without API keys
 - [croniter](https://github.com/kiorky/croniter) — cron expression parsing for the scheduler
 
@@ -328,12 +315,19 @@ This fork applies the following changes on top of upstream:
 - **`get_agent_for(sender)`** — retrieves or lazily creates a per-sender agent instance
 - **`server_reload_model()`** — reloads the model on LM Studio with a new context window length via the management API
 
-### `tts.py` (new)
-- Lazy-loaded Kokoro TTS pipeline singleton
-- `synthesize(text) -> bytes` — generates OGG/Opus audio from text via Kokoro → ffmpeg encode at 24 kbps voip profile
+### `tts.py` (rewritten)
+- Thin HTTP client around `{AUDIO_API_URL}/v1/audio/speech`
+- `synthesize(text) -> bytes` — posts text, returns OGG/Opus bytes ready for Signal
+- Public API preserved (`warmup()`, `synthesize()`) so `bot.py` is untouched
+
+### `transcribe.py` (rewritten)
+- Thin HTTP client around `{AUDIO_API_URL}/v1/audio/transcriptions`
+- Public API preserved (`warmup()`, `transcribe_audio()`, `download_and_transcribe()`, `AUDIO_CONTENT_TYPES`) so `bot.py` is untouched
+- Whisper, faster-whisper, kokoro-onnx, and soundfile removed from `requirements.txt`
 
 ### `config.py`
-- **`TTSConfig`** — `TTS_ENABLED`, `TTS_VOICE`, `TTS_LANG`, `TTS_SPEED` environment variables with defaults
+- **`AudioAPIConfig`** — `AUDIO_API_URL` environment variable, replaces the old `WhisperConfig`
+- **`TTSConfig`** — `TTS_ENABLED`, `TTS_VOICE`, `TTS_LANG`, `TTS_SPEED` environment variables (forwarded per-request to the audio service)
 
 ### `skills/web_search/skill.yaml`
 - **Disabled** — replaced by a SearXNG-based custom skill in the deployment stack
