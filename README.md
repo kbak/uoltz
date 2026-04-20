@@ -6,18 +6,16 @@ A local-first AI chatbot for [Signal](https://signal.org/) messenger with plugga
 
 - **100% local** — your LLM, your data, no cloud APIs required
 - **Any OpenAI-compatible backend** — LM Studio, Ollama, vLLM, llama.cpp
-- **Pluggable skill system** — drop a folder in `app/skills/`, restart, done
+- **Pluggable skill system** — drop a folder in `app/skills/` (built-in) or `data/custom_skills/` (external, survives container rebuilds), restart, done
 - **Voice messages in** — automatic transcription via a remote OpenAI-compatible STT service (e.g. [audio-api](https://github.com/kbak/Stack) — a shared Whisper/Kokoro GPU service)
 - **Voice messages out** — bot replies with a voice note after every text reply to your voice message, synthesized by the same audio service (Kokoro TTS)
 - **Image understanding** — send a photo and the bot describes or analyzes it
-- **Multi-agent brainstorming** — domain-aware parallel ideation with fact-checking, YouTube video analysis, RSS feed context, prior brainstorm awareness, and confidence-scored reports via Strands Agents Graph pattern
+- **Multi-agent brainstorming** — domain-aware parallel ideation with fact-checking, YouTube video analysis, prior brainstorm awareness, and confidence-scored reports via Strands Agents Graph pattern
 - **Real-time research** — web + news search with AI synthesis
-- **YouTube summarization** — extract transcripts (captions or Whisper) and produce detailed video summaries
+- **YouTube summarization** — extract transcripts and produce detailed video summaries
 - **URL summarization** — fetch and summarize any web page or article
-- **RSS digest** — FreshRSS integration for curated feed summaries
-- **Self-extending** — generate new skills from natural language descriptions at runtime
+- **Long-term memory** — durable user preferences and stable facts recalled across conversations
 - **Proactive scheduler** — cron-based jobs that send you updates automatically
-- **Signal account management** — register numbers, manage groups, all from chat
 - **Runtime controls** — switch models, toggle formatting, adjust context window, all via slash commands
 - **Per-sender conversation isolation** — each contact has its own agent instance and history
 - **Dual deployment** — run on bare metal or in Docker with one command
@@ -88,7 +86,7 @@ Builds and starts both signal-api and the bot as containers.
 **Register a new number:**
 
 ```bash
-# May require a captcha — see app/skills/signal_admin/account.py for details
+# May require a captcha — see signal-cli-rest-api docs for details
 curl -X POST http://localhost:9922/v1/register/+1234567890
 curl -X POST http://localhost:9922/v1/register/+1234567890/verify/CODE
 ```
@@ -231,15 +229,16 @@ signal-agent/
 │   ├── requirements.txt
 │   └── skills/                 # Auto-discovered skill plugins
 │       ├── registry.py         # Skill discovery engine
-│       ├── _template/          # Starter template for new skills
+│       ├── _template/          # Starter template for new skills (ignored by loader)
 │       ├── brainstorm/         # Multi-agent brainstorming (Strands Graph)
-│       ├── notes/              # Local note-taking
+│       ├── memory/             # Long-term cross-conversation memory
+│       ├── notes/              # Local note-taking (disabled by default)
 │       ├── research/           # Real-time web research
-│       ├── rss_digest/         # FreshRSS feed digest
-│       ├── shell/              # Guarded shell commands
-│       ├── skill_builder/      # Runtime skill generation
+│       ├── rss_digest/         # FreshRSS feed digest (disabled by default)
+│       ├── shell/              # Guarded shell commands (disabled by default)
+│       ├── skill_builder/      # Runtime skill generation (disabled by default)
 │       ├── summarize/          # URL/text summarization
-│       ├── web_search/         # DuckDuckGo search
+│       ├── web_search/         # DuckDuckGo search (disabled by default)
 │       └── youtube_summary/    # YouTube video summarization
 ├── schedules/                  # Cron job definitions (YAML)
 ├── data/                       # Persistent data (gitignored)

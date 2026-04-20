@@ -4,18 +4,25 @@ Skills are auto-discovered from `app/skills/`. Each skill is a folder with a `sk
 
 ## Built-in Skills
 
+Enabled out of the box:
+
 | Skill | Tools | Description |
 |-------|-------|-------------|
-| `web_search` | `web_search` | DuckDuckGo search, no API key needed |
 | `research` | `research_topic` | Multi-source web + news search with date verification and AI synthesis. Best for factual lookups: weather, stock prices, current events |
-| `brainstorm` | `brainstorm_topic` | Multi-agent brainstorming v2 with domain-aware specialists, fact-checking, YouTube video analysis, RSS feed context, prior brainstorm awareness, and confidence-scored reports. Saves results to `data/brainstorms/` |
-| `youtube_summary` | `summarize_youtube` | Extract YouTube transcripts (captions or Whisper fallback) and produce detailed video summaries. Handles long videos via chunked summarization |
+| `brainstorm` | `brainstorm_topic` | Multi-agent brainstorming with domain-aware specialists, fact-checking, YouTube video analysis, prior brainstorm awareness, and confidence-scored reports. Saves results to `data/brainstorms/` |
+| `youtube_summary` | `summarize_youtube` | Extract YouTube transcripts and produce detailed video summaries. Handles long videos via chunked summarization |
 | `summarize` | `summarize_content` | Fetch and summarize any URL or raw text. Extracts article content with BeautifulSoup, converts to markdown, produces TLDR + key points |
-| `rss_digest` | `rss_digest` | FreshRSS integration — fetches unread articles from monitored feeds (The Register, AWS blogs), summarizes each, marks as read |
-| `notes` | `save_note`, `list_notes`, `read_note` | Local JSON-backed note-taking |
-| `shell` | `run_shell_command` | Guarded local shell command execution (dangerous commands blocked) |
-| `skill_builder` | `create_skill`, `list_skills_on_disk` | Generate new skills from natural language descriptions at runtime. Writes to `data/custom_skills/` for auto-discovery on restart |
-| `signal_admin` | 9 tools | Register/verify numbers, link devices, create/delete groups, send messages to individuals and groups |
+| `memory` | `remember`, `search_memory` | Long-term memory across conversations — save durable user preferences or stable facts; recall past context when the current window lacks needed information |
+
+Shipped but **disabled by default** (flip `enabled: true` in the skill's `skill.yaml` to use):
+
+| Skill | Tools | Why disabled |
+|-------|-------|-------------|
+| `web_search` | `web_search` | Superseded by external MCP-based search (e.g. SearXNG via the stack's mcp-proxy) in multi-service deployments |
+| `notes` | `save_note`, `list_notes`, `read_note` | Niche JSON-backed note store; most users don't need it |
+| `rss_digest` | `rss_digest` | Requires a FreshRSS instance; watcher services handle news in multi-service deployments |
+| `shell` | `run_shell_command` | Runs arbitrary commands inside the bot container with only a trivial `startswith` blocklist — enable only in trusted environments |
+| `skill_builder` | `create_skill`, `list_skills_on_disk` | Runtime LLM-generated skill scaffolding; useful for experimentation, risky to leave enabled |
 
 ## Brainstorm Skill (v2)
 
@@ -70,13 +77,13 @@ Usage: `/brainstorm <topic>` or ask the agent to brainstorm naturally.
 
 Set `enabled: false` in `skill.yaml` to disable a skill without deleting it.
 
-### From natural language (skill_builder)
+### From natural language (skill_builder, opt-in)
 
-You can also ask the bot to create a skill for you at runtime:
+If you enable the `skill_builder` skill (it ships disabled), you can ask the bot to create a skill at runtime:
 
 > "Create a skill that fetches the top Hacker News stories and summarizes them"
 
-The `skill_builder` skill will generate the `skill.yaml` and Python module, write them to `data/custom_skills/`, and the new skill will be available after a restart.
+`skill_builder` will generate the `skill.yaml` and Python module, write them to `data/custom_skills/`, and the new skill will be available after a restart. Because the generated module runs inside the bot with no sandbox, keep this skill disabled unless you trust both the LLM and the prompts that reach it.
 
 ### Skill anatomy
 

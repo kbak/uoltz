@@ -56,7 +56,7 @@ CONVENTIONS YOU MUST FOLLOW:
 
 7. Keep it simple. Minimal dependencies. Use only what's in requirements.txt:
    strands-agents[openai], strands-agents-tools, httpx, python-dotenv,
-   pyyaml, ddgs, faster-whisper, croniter
+   pyyaml, ddgs, croniter
 
 8. Skill name must be a valid Python identifier (lowercase, underscores).
 

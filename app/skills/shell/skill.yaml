@@ -1,7 +1,7 @@
 name: shell
 description: Run guarded shell commands on the local machine. Use plain text for outputs (no markdown) and avoid using markdown-like symbols (asterisks for bold, hashes for sections etc.).
 version: "1.0.0"
-enabled: true
+enabled: false
 
 tools:
   - "shell_cmd:run_shell_command"

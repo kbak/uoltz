@@ -148,9 +148,6 @@ fi
 echo "  Installing/updating dependencies..."
 uv pip install -r app/requirements.txt --quiet
 
-# Pre-download whisper model if not cached
-"$VENV_DIR/bin/python" -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')" 2>/dev/null
-
 # ── Step 4: Launch the bot ───────────────────────────────────────────
 
 echo ""
