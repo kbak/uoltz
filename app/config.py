@@ -29,6 +29,16 @@ class SignalConfig:
     allowed_numbers: frozenset[str] = field(default_factory=lambda: _parse_allowed())
     group_prefix: str = field(default_factory=lambda: os.getenv("BOT_GROUP_PREFIX", "@bot"))
     bot_name: str = field(default_factory=lambda: os.getenv("BOT_GROUP_PREFIX", "@bot").lstrip("@"))
+    briefing_recipient: str = field(default_factory=lambda: os.getenv("BRIEFING_RECIPIENT", ""))
+
+
+@dataclass(frozen=True)
+class MemoryConfig:
+    """memory-mcp (Mem0 + bge-m3 + Qdrant) configuration."""
+    base_url: str = field(default_factory=lambda: os.getenv("MEMORY_MCP_URL", "http://memory-mcp:8089"))
+    dir: str = field(default_factory=lambda: os.getenv("MEMORY_DIR_MOUNT", "/memory"))
+    default_user_id: str = field(default_factory=lambda: os.getenv("MEMORY_DEFAULT_USER_ID", "default"))
+    timeout: float = field(default_factory=lambda: float(os.getenv("MEMORY_HTTP_TIMEOUT", "5.0")))
 
 
 @dataclass(frozen=True)
@@ -67,6 +77,7 @@ signal = SignalConfig()
 audio_api = AudioAPIConfig()
 tts = TTSConfig()
 freshrss = FreshRSSConfig()
+memory = MemoryConfig()
 
 
 def make_model():

@@ -160,8 +160,15 @@ def handle_direct_skill(cmd: str, args: str, signal: SignalClient, sender: str, 
 
 # ── Slash command handler ────────────────────────────────────────────
 
-def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
-    """Handle a slash command instantly. Returns True if handled."""
+def handle_slash_command(cmd: str, signal: SignalClient, sender: str, reply_to: str | None = None, group_id: str | None = None) -> bool:
+    """Handle a slash command instantly. Returns True if handled.
+
+    `sender` is the Signal number of the person who typed the command.
+    `reply_to` is where replies are sent (group id in groups, sender in DMs).
+    `group_id` is set only when the message came from a group chat.
+    """
+    if reply_to is None:
+        reply_to = sender
     parts = cmd.strip().split(None, 2)
     command = parts[0].lower()
     arg1 = parts[1].lower() if len(parts) > 1 else ""
@@ -172,9 +179,9 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
             task = _current_task[0]
         if task and not task.done():
             _agent_loop.call_soon_threadsafe(task.cancel)
-            signal.send(sender, "🛑 Stopping current query...")
+            signal.send(reply_to, "🛑 Stopping current query...")
         else:
-            signal.send(sender, "Nothing is running.")
+            signal.send(reply_to, "Nothing is running.")
         return True
 
     if command == "/history":
@@ -183,9 +190,9 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
             n = int(arg1) if arg1 else 10
         except ValueError:
             n = 10
-        agent = _agents.get(sender)
+        agent = _agents.get(reply_to)
         if not agent or not hasattr(agent, "messages") or not agent.messages:
-            signal.send(sender, "No agent history for this chat yet.")
+            signal.send(reply_to, "No agent history for this chat yet.")
             return True
         msgs = agent.messages[-n:]
         lines = [f"🧠 Agent history (last {len(msgs)}/{len(agent.messages)} msgs):\n"]
@@ -210,14 +217,14 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
                 content_str = str(content)
             snippet = content_str.replace("\n", " ⏎ ")[:400]
             lines.append(f"[{i}] {role}: {snippet}")
-        signal.send(sender, "\n\n".join(lines))
+        signal.send(reply_to, "\n\n".join(lines))
         return True
 
     if command == "/help":
         registry = get_registry()
         cmd_help = registry.commands_help()
         skill_section = f"Direct skills (bypass LLM routing):\n{cmd_help}\n\n" if cmd_help else ""
-        signal.send(sender, (
+        signal.send(reply_to, (
             f"Available commands:\n\n"
             f"{skill_section}"
             f"Bot controls:\n"
@@ -233,13 +240,16 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
             "  /schedules  —  List scheduled jobs\n"
             "  /md on|off  —  Toggle markdown formatting\n"
             "  /debug on|off  —  Toggle debug metrics\n"
+            "  /memory show  —  List stored long-term memories\n"
+            "  /memory forget <id>  —  Delete a memory by id\n"
+            "  /memory reload  —  Reload USER.md + MEMORY.md into system prompt\n"
             "\nAnything without / is sent to the AI agent."
         ))
         return True
 
     if command == "/model":
         if not arg1:
-            signal.send(sender, (
+            signal.send(reply_to, (
                 f"🤖 Model: {get_current_model_id()}\n"
                 f"🔗 Server: {config.llm.base_url}\n"
                 f"🌡️ Temperature: {config.llm.temperature}\n"
@@ -250,14 +260,14 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
         if arg1 == "list":
             models = list_available_models()
             if not models:
-                signal.send(sender, "Could not fetch models from the server.")
+                signal.send(reply_to, "Could not fetch models from the server.")
             else:
                 current = get_current_model_id()
                 lines = []
                 for i, m in enumerate(models, 1):
                     marker = " ◀ active" if m == current else ""
                     lines.append(f"  [{i}] {m}{marker}")
-                signal.send(sender, f"Available models ({len(models)}):\n\n" + "\n".join(lines))
+                signal.send(reply_to, f"Available models ({len(models)}):\n\n" + "\n".join(lines))
             return True
 
         if arg1 == "load" and arg2:
@@ -268,7 +278,7 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
                 if 1 <= idx <= len(models):
                     resolved = models[idx - 1]
                 else:
-                    signal.send(sender, f"Index {idx} out of range. Use /model list to see 1-{len(models)}.")
+                    signal.send(reply_to, f"Index {idx} out of range. Use /model list to see 1-{len(models)}.")
                     return True
             except ValueError:
                 query_lower = query.lower()
@@ -280,96 +290,152 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str) -> bool:
                     for i, m in enumerate(matches, 1):
                         lines.append(f"  [{i}] {m}")
                     lines.append("\nBe more specific or use the number from /model list.")
-                    signal.send(sender, "\n".join(lines))
+                    signal.send(reply_to, "\n".join(lines))
                     return True
                 else:
-                    signal.send(sender, f"No model matching \"{query}\". Use /model list to see available models.")
+                    signal.send(reply_to, f"No model matching \"{query}\". Use /model list to see available models.")
                     return True
 
-            signal.send(sender, f"🔄 Loading model: {resolved}...")
+            signal.send(reply_to, f"🔄 Loading model: {resolved}...")
             try:
                 create_agent(model_id=resolved)
-                signal.send(sender, f"✅ Switched to: {resolved}")
+                signal.send(reply_to, f"✅ Switched to: {resolved}")
             except Exception as e:
-                signal.send(sender, f"Failed to load model: {e}")
+                signal.send(reply_to, f"Failed to load model: {e}")
             return True
 
     if command == "/skills":
         registry = get_registry()
         if not registry.skills:
-            signal.send(sender, "No skills loaded.")
+            signal.send(reply_to, "No skills loaded.")
             return True
         lines = [f"Loaded {len(registry.skills)} skill(s), {len(registry.tools)} tool(s):\n"]
         for s in registry.skills:
             tool_names = ", ".join(ref.split(":")[-1] for ref in s.tools)
             lines.append(f"📦 {s.name} v{s.version}\n   {s.description}\n   Tools: {tool_names}\n")
-        signal.send(sender, "\n".join(lines))
+        signal.send(reply_to, "\n".join(lines))
         return True
 
     if command == "/md":
         if arg1 == "on":
             state.markdown = True
             refresh_system_prompt()
-            signal.send(sender, "✅ Markdown formatting ON")
+            signal.send(reply_to, "✅ Markdown formatting ON")
             return True
         elif arg1 == "off":
             state.markdown = False
             refresh_system_prompt()
-            signal.send(sender, "✅ Markdown formatting OFF")
+            signal.send(reply_to, "✅ Markdown formatting OFF")
             return True
 
     if command == "/debug":
         if arg1 == "on":
             state.debug = True
-            signal.send(sender, "✅ Debug mode ON — metrics will follow each response")
+            signal.send(reply_to, "✅ Debug mode ON — metrics will follow each response")
             return True
         elif arg1 == "off":
             state.debug = False
-            signal.send(sender, "✅ Debug mode OFF")
+            signal.send(reply_to, "✅ Debug mode OFF")
             return True
 
     if command == "/schedules":
         from scheduler import _load_jobs
         jobs = _load_jobs()
         if not jobs:
-            signal.send(sender, "No scheduled jobs found in schedules/")
+            signal.send(reply_to, "No scheduled jobs found in schedules/")
         else:
             lines = [f"Scheduled jobs ({len(jobs)}):\n"]
             for j in jobs:
                 lines.append(f"📅 {j.name}\n   Schedule: {j.schedule}\n   Recipient: {j.recipient}\n   Prompt: {j.prompt[:80]}...\n")
-            signal.send(sender, "\n".join(lines))
+            signal.send(reply_to, "\n".join(lines))
         return True
 
     if command == "/maxlen" and arg1:
         try:
             tokens = int(arg1)
             if tokens < 128 or tokens > 1_000_000:
-                signal.send(sender, "Value must be between 128 and 1000000.")
+                signal.send(reply_to, "Value must be between 128 and 1000000.")
                 return True
             state.max_tokens = tokens
             model_id = get_current_model_id()
             create_agent(model_id=model_id)
-            signal.send(sender, f"✅ Max response length set to {tokens} tokens")
+            signal.send(reply_to, f"✅ Max response length set to {tokens} tokens")
         except ValueError:
-            signal.send(sender, "Usage: /maxlen <number>  (e.g. /maxlen 8192)")
+            signal.send(reply_to, "Usage: /maxlen <number>  (e.g. /maxlen 8192)")
+        return True
+
+    if command == "/memory":
+        # ACL: in groups, only the briefing recipient (bot owner) may invoke.
+        if group_id:
+            owner = config.signal.briefing_recipient
+            if not owner or sender != owner:
+                logger.info("Rejected /memory in group %s from %s (owner=%s)", group_id, sender, owner or "(unset)")
+                return True  # handled = silently ignored
+        subcmd = arg1 or "show"
+        base = config.memory.base_url.rstrip("/")
+        uid = config.memory.default_user_id
+
+        if subcmd == "show":
+            try:
+                resp = httpx.get(
+                    f"{base}/v1/memory",
+                    params={"user_id": uid, "limit": 100},
+                    timeout=config.memory.timeout,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as e:
+                signal.send(reply_to, f"Memory list failed: {e}")
+                return True
+            results = data.get("results", [])
+            if not results:
+                signal.send(reply_to, f"No memories stored (user_id={uid}).")
+                return True
+            lines = [f"🧠 Memories ({len(results)}, user_id={uid}):\n"]
+            for r in results:
+                mid = r.get("id", "?")
+                text = r.get("memory") or r.get("text") or ""
+                lines.append(f"[{mid[:8]}] {text}")
+            signal.send(reply_to, "\n".join(lines))
+            return True
+
+        if subcmd == "forget" and arg2:
+            memory_id = arg2.strip()
+            try:
+                resp = httpx.delete(
+                    f"{base}/v1/memory/{memory_id}",
+                    timeout=config.memory.timeout,
+                )
+                resp.raise_for_status()
+                signal.send(reply_to, f"🗑️ Deleted {memory_id}")
+            except Exception as e:
+                signal.send(reply_to, f"Delete failed: {e}")
+            return True
+
+        if subcmd == "reload":
+            refresh_system_prompt()
+            signal.send(reply_to, "✅ Tier 1 memory (USER.md + MEMORY.md) reloaded into system prompt.")
+            return True
+
+        signal.send(reply_to, "Usage: /memory [show | forget <id> | reload]")
         return True
 
     if command == "/context" and arg1:
         try:
             ctx_size = int(arg1)
             if ctx_size < 512 or ctx_size > 1_000_000:
-                signal.send(sender, "Context window must be between 512 and 1000000.")
+                signal.send(reply_to, "Context window must be between 512 and 1000000.")
                 return True
             model_id = get_current_model_id()
-            signal.send(sender, f"🔄 Reloading {model_id} with context_length={ctx_size}...")
+            signal.send(reply_to, f"🔄 Reloading {model_id} with context_length={ctx_size}...")
             try:
                 result_msg = server_reload_model(model_id, ctx_size)
                 create_agent(model_id=model_id)
-                signal.send(sender, f"✅ {result_msg}")
+                signal.send(reply_to, f"✅ {result_msg}")
             except Exception as e:
-                signal.send(sender, f"Failed to reload model: {e}")
+                signal.send(reply_to, f"Failed to reload model: {e}")
         except ValueError:
-            signal.send(sender, "Usage: /context <number>  (e.g. /context 16384)")
+            signal.send(reply_to, "Usage: /context <number>  (e.g. /context 16384)")
         return True
 
     return False
@@ -711,7 +777,7 @@ def main():
                     if handle_direct_skill(skill_cmd, skill_args, signal, reply_to, images=images):
                         continue
 
-                    if handle_slash_command(text, signal, reply_to):
+                    if handle_slash_command(text, signal, sender=sender, reply_to=reply_to, group_id=group_id):
                         continue
 
                 # Ack with robot emoji reaction, queue for sequential processing

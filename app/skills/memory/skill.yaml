@@ -1,0 +1,8 @@
+name: memory
+description: Long-term memory across conversations. Use remember() to save a durable user preference or stable fact. Use search_memory() to recall past context when the current window lacks needed information. Do NOT call remember() for transient chat or your own actions.
+version: "1.0.0"
+enabled: true
+
+tools:
+  - "memory:remember"
+  - "memory:search_memory"
