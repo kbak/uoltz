@@ -25,7 +25,7 @@ from signal_client import SignalClient
 from agent import (
     create_agent, get_agent, get_agent_for, get_registry, refresh_system_prompt,
     list_available_models, get_current_model_id, get_current_max_tokens,
-    server_reload_model,
+    server_reload_model, get_running_model,
 )
 from skills import SkillRegistry
 from transcribe import download_and_transcribe, AUDIO_CONTENT_TYPES
@@ -514,6 +514,10 @@ def _worker(signal: SignalClient):
             if msg_type == "agent":
                 _, _signal, sender, text, images, voice_reply, orig_sender, orig_timestamp = item
                 try:
+                    running = get_running_model()
+                    if running and running != get_current_model_id():
+                        logger.info("Auto-switching to running model: %s", running)
+                        create_agent(model_id=running)
                     agent = get_agent_for(sender)
 
                     async def _run_agent():

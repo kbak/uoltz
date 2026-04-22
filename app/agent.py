@@ -103,13 +103,17 @@ def create_agent(model_id: str | None = None) -> tuple[Agent, SkillRegistry]:
     """Create and return a configured Strands Agent.
 
     Args:
-        model_id: Override model ID. If None, uses config.llm.model_id.
+        model_id: Override model ID. If None, auto-detect from llama-swap's
+            /running endpoint, falling back to config.llm.model_id.
     """
     global _agents, _registry, _model
 
     from runtime import state
 
-    mid = model_id or config.llm.model_id
+    if model_id is None:
+        mid = get_running_model() or config.llm.model_id
+    else:
+        mid = model_id
     max_tok = state.max_tokens or config.llm.max_tokens
 
     _model = OpenAIModel(
@@ -230,6 +234,28 @@ def list_available_models() -> list[str]:
     except Exception as e:
         logger.error("Failed to list models: %s", e)
         return []
+
+
+def get_running_model() -> str | None:
+    """Query llama-swap's /running endpoint for the currently loaded model.
+
+    Returns the first running model's id, or None if nothing is loaded
+    or the endpoint is unreachable (e.g. backend isn't llama-swap).
+    """
+    base = config.llm.base_url.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    try:
+        resp = httpx.get(f"{base}/running", timeout=2)
+        resp.raise_for_status()
+        running = resp.json().get("running", [])
+        for entry in running:
+            mid = entry.get("model")
+            if mid:
+                return mid
+    except Exception as e:
+        logger.debug("Could not query /running: %s", e)
+    return None
 
 
 def get_current_model_id() -> str:
