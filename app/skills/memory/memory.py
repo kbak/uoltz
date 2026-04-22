@@ -1,7 +1,7 @@
 """Long-term memory tools that call memory-mcp's REST API.
 
-Tier 2 of the memory architecture. Tier 1 (USER.md + MEMORY.md) is injected
-directly into the system prompt and doesn't use these tools.
+Tier 2 of the memory architecture. Tier 1 (SOUL.md + USER.md + MEMORY.md) is
+injected directly into the system prompt and doesn't use these tools.
 """
 
 import logging

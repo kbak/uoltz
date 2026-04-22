@@ -242,7 +242,7 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str, reply_to: 
             "  /debug on|off  —  Toggle debug metrics\n"
             "  /memory show  —  List stored long-term memories\n"
             "  /memory forget <id>  —  Delete a memory by id\n"
-            "  /memory reload  —  Reload USER.md + MEMORY.md into system prompt\n"
+            "  /memory reload  —  Reload SOUL.md + USER.md + MEMORY.md into system prompt\n"
             "\nAnything without / is sent to the AI agent."
         ))
         return True
@@ -414,7 +414,7 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str, reply_to: 
 
         if subcmd == "reload":
             refresh_system_prompt()
-            signal.send(reply_to, "✅ Tier 1 memory (USER.md + MEMORY.md) reloaded into system prompt.")
+            signal.send(reply_to, "✅ Tier 1 memory (SOUL.md + USER.md + MEMORY.md) reloaded into system prompt.")
             return True
 
         signal.send(reply_to, "Usage: /memory [show | forget <id> | reload]")

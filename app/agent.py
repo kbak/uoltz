@@ -51,7 +51,7 @@ context you need.\
 
 
 def _load_tier1_memory() -> str:
-    """Read USER.md + MEMORY.md from the mounted memory dir, if present.
+    """Read SOUL.md + USER.md + MEMORY.md from the mounted memory dir, if present.
 
     Returns an empty string when the dir or files are missing — the bot still
     works without them, just without always-on user context.
@@ -61,7 +61,7 @@ def _load_tier1_memory() -> str:
         return ""
 
     blocks = []
-    for fname, tag in [("USER.md", "user_profile"), ("MEMORY.md", "memory")]:
+    for fname, tag in [("SOUL.md", "soul"), ("USER.md", "user_profile"), ("MEMORY.md", "memory")]:
         path = root / fname
         if not path.is_file():
             continue
