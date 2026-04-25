@@ -580,12 +580,20 @@ def _worker(signal: SignalClient):
                         if images:
                             kwargs["images"] = images
                         kwargs["status_fn"] = _status
+                        # Optional kwargs for skills that need to send richer
+                        # replies (e.g. voice notes, reactions). Skills that
+                        # don't accept them are handled by the TypeError
+                        # fallback below.
+                        kwargs["signal"] = _signal
+                        kwargs["sender"] = sender
                         try:
                             result = dc.func(**kwargs)
                         except TypeError:
-                            # Skill doesn't accept status_fn or images — call without
+                            # Skill doesn't accept some of the optional kwargs — retry without
                             kwargs.pop("status_fn", None)
                             kwargs.pop("images", None)
+                            kwargs.pop("signal", None)
+                            kwargs.pop("sender", None)
                             try:
                                 result = dc.func(**{dc.arg_name: args, "images": images})
                             except TypeError:
