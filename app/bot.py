@@ -138,8 +138,22 @@ _GROUP_HISTORY_MAX = 30
 
 # ── Direct skill invocation (bypasses LLM tool selection) ────────────
 
-def handle_direct_skill(cmd: str, args: str, signal: SignalClient, sender: str, images: list | None = None) -> bool:
-    """Try to handle a direct skill invocation via registry commands. Returns True if handled."""
+def handle_direct_skill(
+    cmd: str,
+    args: str,
+    signal: SignalClient,
+    sender: str,
+    images: list | None = None,
+    *,
+    target_author: str | None = None,
+    target_ts: int | None = None,
+) -> bool:
+    """Try to handle a direct skill invocation via registry commands. Returns True if handled.
+
+    `target_author` + `target_ts` identify the original user message; passed
+    through to skills that want to call `signal.react()` on it as a status
+    indicator instead of sending text messages.
+    """
     registry = get_registry()
     command = cmd.lower()
 
@@ -154,7 +168,10 @@ def handle_direct_skill(cmd: str, args: str, signal: SignalClient, sender: str, 
         return True
 
     # Ack instantly, queue the work
-    _work_queue.put(("direct_skill", signal, sender, command, dc, args.strip(), images or []))
+    _work_queue.put((
+        "direct_skill", signal, sender, command, dc, args.strip(), images or [],
+        target_author, target_ts,
+    ))
     return True
 
 
@@ -569,7 +586,7 @@ def _worker(signal: SignalClient):
                     _signal.send(sender, debug_msg)
 
             elif msg_type == "direct_skill":
-                _, _signal, sender, command, dc, args, images = item
+                _, _signal, sender, command, dc, args, images, target_author, target_ts = item
 
                 def _status(msg: str):
                     _signal.send(sender, msg)
@@ -586,6 +603,8 @@ def _worker(signal: SignalClient):
                         # fallback below.
                         kwargs["signal"] = _signal
                         kwargs["sender"] = sender
+                        kwargs["target_author"] = target_author
+                        kwargs["target_ts"] = target_ts
                         try:
                             result = dc.func(**kwargs)
                         except TypeError:
@@ -594,6 +613,8 @@ def _worker(signal: SignalClient):
                             kwargs.pop("images", None)
                             kwargs.pop("signal", None)
                             kwargs.pop("sender", None)
+                            kwargs.pop("target_author", None)
+                            kwargs.pop("target_ts", None)
                             try:
                                 result = dc.func(**{dc.arg_name: args, "images": images})
                             except TypeError:
@@ -791,7 +812,11 @@ def main():
                     parts = text.strip().split(None, 1)
                     skill_cmd = parts[0]
                     skill_args = parts[1] if len(parts) > 1 else ""
-                    if handle_direct_skill(skill_cmd, skill_args, signal, reply_to, images=images):
+                    if handle_direct_skill(
+                        skill_cmd, skill_args, signal, reply_to,
+                        images=images,
+                        target_author=sender, target_ts=timestamp,
+                    ):
                         continue
 
                     if handle_slash_command(text, signal, sender=sender, reply_to=reply_to, group_id=group_id):
