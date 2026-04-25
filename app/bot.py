@@ -600,13 +600,18 @@ def _worker(signal: SignalClient):
                                 result = dc.func(**{dc.arg_name: args})
                     else:
                         result = dc.func()
-                    reply = str(result) if result else "(no output)"
+                    # Skills that handle their own sending (e.g. voice notes)
+                    # may return "" or None to suppress the trailing text reply.
+                    reply = str(result) if result else None
                 except Exception as e:
                     logger.exception("Direct skill %s failed", command)
                     reply = f"Error: {e}"
 
-                _signal.send(sender, reply)
-                logger.info("Direct skill %s replied to %s (%d chars)", command, sender, len(reply))
+                if reply:
+                    _signal.send(sender, reply)
+                    logger.info("Direct skill %s replied to %s (%d chars)", command, sender, len(reply))
+                else:
+                    logger.info("Direct skill %s completed silently", command)
 
             _work_queue.task_done()
 
