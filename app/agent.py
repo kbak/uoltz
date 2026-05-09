@@ -1,6 +1,7 @@
 """Strands Agent configured with an OpenAI-compatible LLM and auto-discovered skills."""
 
 import logging
+import re
 from pathlib import Path
 
 import httpx
@@ -111,7 +112,7 @@ def create_agent(model_id: str | None = None) -> tuple[Agent, SkillRegistry]:
     from runtime import state
 
     if model_id is None:
-        mid = get_running_model() or config.llm.model_id
+        mid = config.llm.model_id or get_running_model()
     else:
         mid = model_id
     max_tok = state.max_tokens or config.llm.max_tokens
@@ -236,11 +237,25 @@ def list_available_models() -> list[str]:
         return []
 
 
+_PARAM_COUNT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*B\b", re.IGNORECASE)
+
+
+def _model_param_count(model_id: str) -> float:
+    """Parse parameter count in billions from a model id (e.g. 'qwen3.6-27B-Q6' → 27.0).
+
+    Returns 0.0 when no 'NNB' token is found, so unparseable ids sort last.
+    """
+    match = _PARAM_COUNT_RE.search(model_id)
+    return float(match.group(1)) if match else 0.0
+
+
 def get_running_model() -> str | None:
     """Query llama-swap's /running endpoint for the currently loaded model.
 
-    Returns the first running model's id, or None if nothing is loaded
-    or the endpoint is unreachable (e.g. backend isn't llama-swap).
+    When multiple models are loaded (e.g. a main model + a small coder/draft
+    model on a second GPU), returns the largest by parameter count parsed from
+    the model id. Falls back to the first entry if no ids are parseable.
+    Returns None if nothing is loaded or the endpoint is unreachable.
     """
     base = config.llm.base_url.rstrip("/")
     if base.endswith("/v1"):
@@ -249,10 +264,10 @@ def get_running_model() -> str | None:
         resp = httpx.get(f"{base}/running", timeout=2)
         resp.raise_for_status()
         running = resp.json().get("running", [])
-        for entry in running:
-            mid = entry.get("model")
-            if mid:
-                return mid
+        ids = [entry.get("model") for entry in running if entry.get("model")]
+        if not ids:
+            return None
+        return max(ids, key=_model_param_count)
     except Exception as e:
         logger.debug("Could not query /running: %s", e)
     return None
