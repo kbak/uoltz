@@ -556,6 +556,13 @@ def _worker(signal: SignalClient):
                     try:
                         result = future.result()
                         reply = str(result)
+                        # Guard: local LLMs sometimes output the Strands error string as text
+                        # rather than raising MaxTokensReachedException. Detect and reset.
+                        if "unrecoverable state" in reply and "max_tokens" in reply.lower():
+                            from agent import _agents
+                            _agents.pop(sender, None)
+                            logger.warning("MaxTokens error (leaked into reply) for %s — agent reset", sender)
+                            reply = "Hit the output token limit — conversation reset, you can continue. (Use /maxlen to raise the limit for long tasks.)"
                     except asyncio.TimeoutError:
                         logger.warning("Agent timed out for %s after %ds", sender, AGENT_TIMEOUT)
                         reply = f"⏱️ Timed out after {AGENT_TIMEOUT}s."
@@ -563,8 +570,16 @@ def _worker(signal: SignalClient):
                         logger.info("Agent cancelled for %s", sender)
                         reply = "🛑 Stopped."
                 except Exception as e:
-                    logger.exception("Agent error for %s", sender)
-                    reply = f"Sorry, I hit an error: {e}"
+                    from agent import _agents
+                    # Always evict — any exception may leave the agent with corrupted state
+                    _agents.pop(sender, None)
+                    err_str = str(e).lower()
+                    if "max_tokens" in err_str or "maxtokens" in type(e).__name__.lower():
+                        logger.warning("MaxTokens error for %s — agent reset", sender)
+                        reply = "Hit the output token limit — conversation reset, you can continue. (Use /maxlen to raise the limit for long tasks.)"
+                    else:
+                        logger.exception("Agent error for %s — agent reset", sender)
+                        reply = f"Something went wrong — conversation reset, you can try again. ({type(e).__name__}: {e})"
                     _signal.send(sender, reply)
                     _work_queue.task_done()
                     continue
