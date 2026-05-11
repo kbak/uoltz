@@ -79,7 +79,9 @@ def _load_tier1_memory() -> str:
     return "\n".join(blocks) + "\n\n"
 
 # Maximum number of messages to keep in per-sender conversation history
-MAX_HISTORY_MESSAGES = 50
+MAX_HISTORY_MESSAGES = 30
+# Rough character budget (~10k tokens at 4 chars/token) — safety net for large tool results
+MAX_HISTORY_CHARS = 40_000
 
 # Module-level references so we can swap them at runtime
 _agents: dict[str, Agent] = {}  # keyed by sender
@@ -144,6 +146,28 @@ def create_agent(model_id: str | None = None) -> tuple[Agent, SkillRegistry]:
     return sentinel, _registry
 
 
+def _trim_history(agent: Agent, sender: str) -> None:
+    """Trim history by message count then by total character size."""
+    if not hasattr(agent, "messages"):
+        return
+    msgs = list(agent.messages)
+    original_len = len(msgs)
+    if len(msgs) > MAX_HISTORY_MESSAGES:
+        msgs = msgs[-MAX_HISTORY_MESSAGES:]
+    # Secondary guard: if a few large tool results still dominate, keep halving
+    while len(msgs) > 2:
+        total_chars = sum(
+            len(str(m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")))
+            for m in msgs
+        )
+        if total_chars <= MAX_HISTORY_CHARS:
+            break
+        msgs = msgs[len(msgs) // 2:]
+    if len(msgs) < original_len:
+        agent.messages = msgs
+        logger.debug("Trimmed history for %s: %d → %d messages", sender, original_len, len(msgs))
+
+
 def get_agent_for(sender: str) -> Agent:
     """Return (or lazily create) a per-sender Agent instance, with history trimming."""
     if _model is None or _registry is None:
@@ -156,11 +180,7 @@ def get_agent_for(sender: str) -> Agent:
         )
         logger.info("Created new agent for sender %s", sender)
     else:
-        # Trim conversation history to avoid unbounded memory growth
-        agent = _agents[sender]
-        if hasattr(agent, "messages") and len(agent.messages) > MAX_HISTORY_MESSAGES:
-            agent.messages = agent.messages[-MAX_HISTORY_MESSAGES:]
-            logger.debug("Trimmed history for %s to %d messages", sender, MAX_HISTORY_MESSAGES)
+        _trim_history(_agents[sender], sender)
     return _agents[sender]
 
 
