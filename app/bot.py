@@ -571,13 +571,38 @@ def _worker(signal: SignalClient):
                         reply = "🛑 Stopped."
                 except Exception as e:
                     from agent import _agents
-                    # Always evict — any exception may leave the agent with corrupted state
-                    _agents.pop(sender, None)
                     err_str = str(e).lower()
                     if "max_tokens" in err_str or "maxtokens" in type(e).__name__.lower():
-                        logger.warning("MaxTokens error for %s — agent reset", sender)
-                        reply = "Hit the output token limit — conversation reset, you can continue. (Use /maxlen to raise the limit for long tasks.)"
+                        # Strands already ran _recover_message_on_max_tokens_reached before
+                        # raising, so agent.messages is clean — don't evict, let the user
+                        # say "continue" to resume from the partial reply.
+                        logger.warning("MaxTokens error for %s — keeping history for resume", sender)
+                        partial = ""
+                        try:
+                            msgs = getattr(agent, "messages", [])
+                            if msgs:
+                                last = msgs[-1]
+                                content = (last.get("content", "") if isinstance(last, dict)
+                                           else getattr(last, "content", ""))
+                                if isinstance(content, list):
+                                    parts = [
+                                        (c.get("text", "") if isinstance(c, dict) else getattr(c, "text", ""))
+                                        for c in content
+                                        if (isinstance(c, dict) and c.get("type") == "text") or
+                                           (not isinstance(c, dict) and getattr(c, "type", "") == "text")
+                                    ]
+                                    partial = " ".join(p for p in parts if p).strip()
+                                elif isinstance(content, str):
+                                    partial = content.strip()
+                        except Exception:
+                            pass
+                        if partial:
+                            reply = f"{partial}\n\n(truncated — say \"continue\" to resume)"
+                        else:
+                            reply = "Hit the output token limit — say \"continue\" to resume. (Use /maxlen to raise the limit.)"
                     else:
+                        # Unknown error — evict since state may be corrupt
+                        _agents.pop(sender, None)
                         logger.exception("Agent error for %s — agent reset", sender)
                         reply = f"Something went wrong — conversation reset, you can try again. ({type(e).__name__}: {e})"
                     _signal.send(sender, reply)
