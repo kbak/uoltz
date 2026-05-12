@@ -6,7 +6,6 @@ Ack messages fire instantly; the agent work is serialized.
 """
 
 import asyncio
-import base64
 import queue
 import re
 import sys
@@ -83,8 +82,17 @@ def _build_wake_pattern(bot_name: str) -> str:
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
 
+_IMAGE_FORMAT = {
+    "image/jpeg": "jpeg",
+    "image/jpg": "jpeg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+}
+
+
 def _fetch_image_b64(signal_api_url: str, attachment_id: str, content_type: str) -> dict | None:
-    """Download an image attachment and return an OpenAI-compatible image content block."""
+    """Download an image attachment and return a Strands ContentBlock for vision input."""
     try:
         url = f"{signal_api_url.rstrip('/')}/v1/attachments/{attachment_id}"
         resp = httpx.get(url, timeout=30)
@@ -92,11 +100,8 @@ def _fetch_image_b64(signal_api_url: str, attachment_id: str, content_type: str)
         if len(resp.content) > MAX_IMAGE_BYTES:
             logger.warning("Image attachment %s too large (%d bytes), skipping", attachment_id, len(resp.content))
             return None
-        data = base64.standard_b64encode(resp.content).decode()
-        return {
-            "type": "image_url",
-            "image_url": {"url": f"data:{content_type};base64,{data}"},
-        }
+        fmt = _IMAGE_FORMAT.get(content_type.lower(), "jpeg")
+        return {"image": {"format": fmt, "source": {"bytes": resp.content}}}
     except Exception as exc:
         logger.error("Failed to fetch image attachment %s: %s", attachment_id, exc)
         return None
@@ -552,7 +557,7 @@ def _worker(signal: SignalClient):
 
                     async def _run_agent():
                         if images:
-                            content = [{"type": "text", "text": text}] + images
+                            content = [{"text": text}] + images
                             return await agent.invoke_async(content)
                         return await agent.invoke_async(text)
 
