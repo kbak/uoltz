@@ -81,12 +81,17 @@ def _build_wake_pattern(bot_name: str) -> str:
     return r"(?:hey\s+)?(?:" + "|".join(alts) + r")(?:\s*[,.]?)?"
 
 
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
+
 def _fetch_image_b64(signal_api_url: str, attachment_id: str, content_type: str) -> dict | None:
     """Download an image attachment and return an OpenAI-compatible image content block."""
     try:
         url = f"{signal_api_url.rstrip('/')}/v1/attachments/{attachment_id}"
         resp = httpx.get(url, timeout=30)
         resp.raise_for_status()
+        if len(resp.content) > MAX_IMAGE_BYTES:
+            logger.warning("Image attachment %s too large (%d bytes), skipping", attachment_id, len(resp.content))
+            return None
         data = base64.standard_b64encode(resp.content).decode()
         return {
             "type": "image_url",
@@ -115,6 +120,11 @@ logger = logging.getLogger("signal-bot")
 
 POLL_INTERVAL = 1
 ACK_MESSAGE = "⏳ Got it, working on it..."
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 # Global message queue — the polling loop enqueues, the worker dequeues
 _work_queue: queue.Queue = queue.Queue()
@@ -418,6 +428,9 @@ def handle_slash_command(cmd: str, signal: SignalClient, sender: str, reply_to: 
 
         if subcmd == "forget" and arg2:
             memory_id = arg2.strip()
+            if not _UUID_RE.match(memory_id):
+                signal.send(reply_to, "Invalid memory ID — expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+                return True
             try:
                 resp = httpx.delete(
                     f"{base}/v1/memory/{memory_id}",
@@ -797,11 +810,12 @@ def main():
                 if audio_atts and not text:
                     att = audio_atts[0]
                     att_id = att.get("id", att.get("filename", ""))
+                    att_ct = att.get("contentType", "audio/mp4")
                     logger.info("Voice message from %s, attachment: %s", sender, att_id)
                     signal.react(reply_to, sender, timestamp)
                     signal.react(reply_to, sender, timestamp, "🎤")
                     try:
-                        text = download_and_transcribe(cfg_signal.api_url, att_id)
+                        text = download_and_transcribe(cfg_signal.api_url, att_id, att_ct)
                         is_voice_message = True
                         # Backfill the group history entry (was added with empty text before transcription)
                         if group_id and _group_history.get(group_id):
@@ -874,8 +888,10 @@ def main():
                         recent = list(_group_history.get(group_id, []))
                         unseen = recent[-unseen_count - 1:-1]  # messages since last interaction
                         if unseen:
-                            history_lines = "\n".join(f"{s}: {t}" for s, t in unseen)
-                            text = f"<group_history>\n{history_lines}\n</group_history>\n\n[User asks] {text}"
+                            history_lines = "\n".join(
+                                f"{s}: {t.replace('<<<GROUP_HISTORY_END>>>', '')}" for s, t in unseen
+                            )
+                            text = f"<<<GROUP_HISTORY_START>>>\n{history_lines}\n<<<GROUP_HISTORY_END>>>\n\n[User asks] {text}"
                     _group_last_seen[group_id] = total
 
                 _work_queue.put(("agent", signal, reply_to, text, images, is_voice_message, sender, timestamp))

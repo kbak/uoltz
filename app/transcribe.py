@@ -10,6 +10,16 @@ logger = logging.getLogger(__name__)
 
 AUDIO_CONTENT_TYPES = {"audio/aac", "audio/mp4", "audio/mpeg", "audio/ogg", "audio/x-m4a"}
 
+MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB
+
+_CONTENT_TYPE_EXT = {
+    "audio/ogg": "ogg",
+    "audio/mp4": "m4a",
+    "audio/aac": "aac",
+    "audio/mpeg": "mp3",
+    "audio/x-m4a": "m4a",
+}
+
 
 def warmup() -> None:
     """Confirm audio-api is reachable and its models are loaded."""
@@ -36,7 +46,7 @@ def transcribe_audio(audio_path: str) -> str:
     return text
 
 
-def download_and_transcribe(signal_api_url: str, attachment_id: str) -> str:
+def download_and_transcribe(signal_api_url: str, attachment_id: str, content_type: str = "audio/mp4") -> str:
     """Download an attachment from signal-cli-rest-api and transcribe it via audio-api.
 
     Streams bytes straight from signal-api into audio-api without touching disk.
@@ -48,8 +58,13 @@ def download_and_transcribe(signal_api_url: str, attachment_id: str) -> str:
         resp = client.get(attach_url)
         resp.raise_for_status()
         audio_bytes = resp.content
+        if len(audio_bytes) > MAX_AUDIO_BYTES:
+            raise ValueError(
+                f"Audio attachment too large ({len(audio_bytes) / 1024 / 1024:.1f} MB, limit 25 MB)"
+            )
 
-        files = {"file": (f"{attachment_id}.m4a", audio_bytes, "audio/mp4")}
+        ext = _CONTENT_TYPE_EXT.get(content_type, "m4a")
+        files = {"file": (f"{attachment_id}.{ext}", audio_bytes, content_type)}
         tresp = client.post(transcribe_url, files=files, timeout=120)
         tresp.raise_for_status()
         text = tresp.json().get("text", "").strip()

@@ -46,7 +46,7 @@ The setup scripts check for these automatically and will install what they can:
 
 ```bash
 git clone https://github.com/maciejjedrzejczyk/uoltz
-cd signal-agent
+cd uoltz
 cp .env.example .env
 # Edit .env — set your Signal number and LLM server details
 ```
@@ -104,9 +104,13 @@ Text or voice-message the bot's number from Signal. Try:
 
 All commands respond instantly without hitting the LLM.
 
+**Bot controls:**
+
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all available commands |
+| `/stop` | Cancel the currently running agent query |
+| `/history [n]` | Show last n messages of agent history for this chat (default 10) |
 | `/model` | Show current model, server, temperature, max tokens |
 | `/model list` | List all models on the LLM server (numbered) |
 | `/model load <#\|name>` | Switch model by index number, partial name, or full name |
@@ -116,7 +120,20 @@ All commands respond instantly without hitting the LLM.
 | `/schedules` | List all active scheduled jobs |
 | `/md on\|off` | Toggle markdown formatting in responses |
 | `/debug on\|off` | Show execution metrics (cycles, tokens, duration) after each response |
-| `/stop` | Cancel the currently running agent query |
+| `/memory show` | List stored long-term memories |
+| `/memory forget <id>` | Delete a memory by id |
+| `/memory reload` | Reload SOUL.md + USER.md + MEMORY.md into system prompt |
+
+**Direct skill commands** (bypass LLM routing — enabled skills only):
+
+| Command | Description |
+|---------|-------------|
+| `/brainstorm <topic>` | Multi-agent brainstorming with fact-checking and confidence scoring |
+| `/research <topic>` | Real-time web + news search with AI synthesis |
+| `/summarize <url or text>` | Fetch and summarize any URL or raw text |
+| `/yt <youtube-url>` | Extract and summarize a YouTube video |
+| `/search <query>` | DuckDuckGo web search (disabled by default) |
+| `/rss [filter]` | FreshRSS digest (disabled by default) |
 
 ## Built-in Skills
 
@@ -152,11 +169,9 @@ enabled: true
 
 ### Included examples
 
-| File | Schedule | What it does |
-|------|----------|-------------|
-| `morning_weather.yaml` | Daily 7 AM | Weather forecast for Warsaw |
-| `amzn_stock.yaml` | Every 10 min | AMZN stock price check |
-| `_examples.yaml` | (disabled) | Template showing the format |
+| File | Description |
+|------|-------------|
+| `_examples.yaml` | Template showing the YAML format (all jobs disabled, not loaded) |
 
 Jobs are loaded at bot startup. Use `/schedules` to verify what's active.
 
@@ -257,11 +272,31 @@ All configuration is in `.env` (created from `.env.example`). The file supports 
 # Docker mode (bot in container)
 LLM_BASE_URL=http://host.docker.internal:1234/v1
 SIGNAL_API_URL=http://signal-api:8080
+AUDIO_API_URL=http://audio-api:8088
 
 # Host mode (bot on bare metal)
 LLM_BASE_URL=http://localhost:1234/v1
 SIGNAL_API_URL=http://localhost:9922
+AUDIO_API_URL=http://localhost:8088
 ```
+
+**Key environment variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SIGNAL_NUMBER` | *(required)* | Bot's Signal number in international format |
+| `LLM_BASE_URL` | `http://localhost:1234/v1` | OpenAI-compatible LLM endpoint |
+| `LLM_MODEL` | `qwen2.5-14b-instruct` | Model ID (auto-detected from llama-swap if unset) |
+| `LLM_MAX_TOKENS` | `4096` | Max output tokens per response |
+| `LLM_TEMPERATURE` | `0.7` | Sampling temperature |
+| `AUDIO_API_URL` | `http://audio-api:8088` | Remote STT + TTS service endpoint |
+| `ALLOWED_NUMBERS` | *(empty)* | Optional secondary allowlist of Signal numbers (comma-separated); Signal's own contact approval is the primary access gate |
+| `BOT_GROUP_PREFIX` | `@bot` | Trigger prefix for group chats (e.g. `@bot ask me something`) |
+| `TTS_ENABLED` | `true` | Send voice note after every reply to a voice message |
+| `TTS_VOICE` | `af_heart` | Kokoro voice name |
+| `MEMORY_MCP_URL` | `http://memory-mcp:8089` | Long-term memory REST API (optional) |
+| `MEMORY_DIR_MOUNT` | `/memory` | Path containing `SOUL.md` / `USER.md` / `MEMORY.md` (optional) |
+| `BRIEFING_RECIPIENT` | *(empty)* | Your Signal number — grants privileged `/memory` access in group chats |
 
 ## LLM Server Compatibility
 
@@ -307,7 +342,7 @@ This fork applies the following changes on top of upstream:
 
 ### `agent.py`
 - **Per-sender agent isolation** — replaced single global `_agent` with a `dict[str, Agent]` keyed by sender; agents are lazily created and share the same model/registry
-- **Conversation history trimming** — each agent's history is capped at 50 messages to prevent unbounded memory growth
+- **Conversation history trimming** — each agent's history is capped at 30 messages (secondary guard: halves the window if total content exceeds ~40k chars) to prevent unbounded memory growth
 - **Language instruction** — system prompt instructs the model to always respond in the user's language
 - **Thinking mode disabled** — `/no_think` prepended to system prompt (for Qwen3 models)
 - **Prompt injection guard** — system prompt instructs the model to ignore directives found inside `<group_history>` context tags
