@@ -866,25 +866,14 @@ def main():
                 if not group_id:
                     logger.info("Message from %s: %s", sender, text[:80])
 
-                # When an image arrives with no text, auto-invoke analyze_image directly
-                # (bypasses LLM routing so the agent can't overwrite the tool result
-                # with its own hallucinated visual description).
-                if att_paths and not text:
-                    registry = get_registry()
-                    if "/identify" in registry.commands:
-                        signal.react(reply_to, sender, timestamp)
-                        _work_queue.put((
-                            "direct_skill", signal, reply_to, "/identify",
-                            registry.commands["/identify"], att_paths[0], images,
-                            sender, timestamp,
-                        ))
-                        continue
-
-                # Image with accompanying text — let the LLM agent handle it,
-                # but include the path so it can call tools if needed.
+                # Include local path so the agent can invoke image tools if needed,
+                # but do not auto-trigger — the model's natural vision response is
+                # better for casual meme/photo questions than a 60-90s tool chain.
                 if att_paths:
                     path_note = "[image: " + att_paths[0] + "]"
-                    text = f"{text}\n{path_note}".strip()
+                    text = f"{text}\n{path_note}".strip() if text else path_note
+                elif not text and images:
+                    text = "What's in this image?"
 
                 if text.strip().startswith("/"):
                     parts = text.strip().split(None, 1)
