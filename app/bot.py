@@ -866,12 +866,15 @@ def main():
                 if not group_id:
                     logger.info("Message from %s: %s", sender, text[:80])
 
-                # Include local path so the agent can invoke image tools if needed,
-                # but do not auto-trigger — the model's natural vision response is
-                # better for casual meme/photo questions than a 60-90s tool chain.
+                # Include local path so the agent can invoke image tools if needed.
                 if att_paths:
-                    path_note = "[image: " + att_paths[0] + "]"
-                    text = f"{text}\n{path_note}".strip() if text else path_note
+                    cmd_parts = text.strip().split(None, 1) if text.strip().startswith("/") else []
+                    if cmd_parts and len(cmd_parts) == 1:
+                        # Slash command with no args — supply the path as the argument
+                        text = f"{cmd_parts[0]} {att_paths[0]}"
+                    else:
+                        path_note = "[image: " + att_paths[0] + "]"
+                        text = f"{text}\n{path_note}".strip() if text else path_note
                 elif not text and images:
                     text = "What's in this image?"
 
