@@ -49,9 +49,9 @@ something. Do not call remember() for transient chat, your own actions, or thing
 the user did not actually state. Use search_memory() when the current window lacks \
 context you need.
 
-IMAGES: When a message contains [image: /path/to/file], always call the analyze_image \
-tool with that path — do not rely on your own visual description. If the user asks \
-"where is this from?" or "find the source", call reverse_image_search instead.\
+IMAGES: When a message contains [image: /path/to/file], you may use your own vision \
+to answer quick questions, but for "who is this?", "what meme is this?", or \
+"where is this from?" always call analyze_image or reverse_image_search with the path.\
 """
 
 
