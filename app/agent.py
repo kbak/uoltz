@@ -47,7 +47,11 @@ MEMORY: Use the remember() tool only when the user states a durable preference o
 a stable fact about themselves or their setup, or explicitly asks you to remember \
 something. Do not call remember() for transient chat, your own actions, or things \
 the user did not actually state. Use search_memory() when the current window lacks \
-context you need.\
+context you need.
+
+IMAGES: When a message contains [image: /path/to/file], always call the analyze_image \
+tool with that path — do not rely on your own visual description. If the user asks \
+"where is this from?" or "find the source", call reverse_image_search instead.\
 """
 
 

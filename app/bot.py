@@ -850,12 +850,15 @@ def main():
                 # Fetch image attachments for vision-capable model
                 image_atts = [a for a in attachments if a.get("contentType", "") in IMAGE_CONTENT_TYPES]
                 images = []
+                att_paths = []  # local paths for image-analysis tools
                 for att in image_atts:
                     att_id = att.get("id", att.get("filename", ""))
                     ct = att.get("contentType", "image/jpeg")
                     block = _fetch_image_b64(cfg_signal.api_url, att_id, ct)
                     if block:
                         images.append(block)
+                    if att_id:
+                        att_paths.append(f"/signal-cli-data/attachments/{att_id}")
 
                 if not text and not images:
                     continue
@@ -863,8 +866,11 @@ def main():
                 if not group_id:
                     logger.info("Message from %s: %s", sender, text[:80])
 
-                # If only an image was sent with no text, add a default prompt
-                if not text and images:
+                # Inject local file path(s) so image-analysis tools can be called
+                if att_paths:
+                    path_note = "[image: " + att_paths[0] + "]"
+                    text = f"{text}\n{path_note}".strip() if text else path_note
+                elif not text and images:
                     text = "What's in this image?"
 
                 if text.strip().startswith("/"):
