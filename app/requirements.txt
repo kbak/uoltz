@@ -1,6 +1,7 @@
 strands-agents[openai]
 strands-agents-tools
 httpx
+websockets
 python-dotenv
 pyyaml
 ddgs

@@ -1,9 +1,20 @@
-"""Thin client for the signal-cli-rest-api with retry logic."""
+"""Thin client for the signal-cli-rest-api with retry logic.
+
+Receiving uses the json-rpc-mode WebSocket (`ws://.../v1/receive/<number>`),
+which keeps signal-cli resident (no per-call JVM cold-start). All other calls
+(send, react, groups, attachments) remain plain REST and are unchanged.
+Requires signal-cli-rest-api running with MODE=json-rpc.
+"""
 
 import base64
+import json
+import queue
+import threading
 import time
 import httpx
 import logging
+
+from websockets.sync.client import connect as ws_connect
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +27,9 @@ class SignalClient:
         self.base_url = base_url.rstrip("/")
         self.number = number
         self._http = httpx.Client(base_url=self.base_url, timeout=60)
+        # Incoming envelopes pushed by the background WebSocket reader.
+        self._rx_queue: queue.Queue = queue.Queue()
+        self._rx_thread: threading.Thread | None = None
 
     def _retry(self, operation: str, func, *args, **kwargs):
         """Execute a function with retries on failure."""
@@ -39,17 +53,76 @@ class SignalClient:
                     )
         return last_exc
 
-    # ── Receive ──────────────────────────────────────────────
+    # ── Receive (json-rpc WebSocket) ─────────────────────────
+    def _ws_url(self) -> str:
+        """Derive the receive WebSocket URL from the REST base URL."""
+        base = self.base_url
+        if base.startswith("https://"):
+            base = "wss://" + base[len("https://"):]
+        elif base.startswith("http://"):
+            base = "ws://" + base[len("http://"):]
+        return f"{base}/v1/receive/{self.number}"
+
+    def _ws_reader(self) -> None:
+        """Background loop: stream envelopes from the WS onto the queue, forever.
+
+        Reconnects with exponential backoff on any drop. signal-cli-rest-api in
+        json-rpc mode pushes one envelope per text frame, in the same shape the
+        REST /v1/receive endpoint returned as list items (``{"envelope": {...}}``).
+        """
+        url = self._ws_url()
+        backoff = 1
+        while True:
+            try:
+                with ws_connect(url, open_timeout=20, max_size=None) as ws:
+                    logger.info("Signal receive WebSocket connected: %s", url)
+                    backoff = 1
+                    for raw in ws:
+                        try:
+                            data = json.loads(raw)
+                        except (TypeError, ValueError):
+                            logger.debug("Ignoring non-JSON WS frame")
+                            continue
+                        if isinstance(data, list):
+                            for item in data:
+                                self._rx_queue.put(item)
+                        elif isinstance(data, dict):
+                            self._rx_queue.put(data)
+            except Exception as exc:
+                logger.warning(
+                    "Signal receive WS disconnected (%s) — reconnecting in %ds",
+                    exc, backoff,
+                )
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 30)
+
+    def _ensure_reader(self) -> None:
+        if self._rx_thread is not None and self._rx_thread.is_alive():
+            return
+        self._rx_thread = threading.Thread(
+            target=self._ws_reader, daemon=True, name="signal-ws-reader",
+        )
+        self._rx_thread.start()
+
     def receive(self) -> list[dict]:
-        """Poll for new incoming messages via the REST API."""
+        """Return any envelopes received via the WebSocket since the last call.
+
+        Drop-in for the old REST poll: blocks up to ~1s for the first message
+        (so the bot loop keeps its cadence), then drains anything else already
+        queued. Returns a list of ``{"envelope": {...}}`` wrappers, or [].
+        """
+        self._ensure_reader()
+        items: list[dict] = []
         try:
-            resp = self._http.get(f"/v1/receive/{self.number}?timeout=1")
-            if resp.status_code == 200:
-                return resp.json() or []
+            items.append(self._rx_queue.get(timeout=1))
+        except queue.Empty:
             return []
-        except Exception as exc:
-            logger.error("receive failed: %s", exc)
-            return []
+        while True:
+            try:
+                items.append(self._rx_queue.get_nowait())
+            except queue.Empty:
+                break
+        return items
 
     # ── Group ID resolution ───────────────────────────────────
     def _resolve_group_id(self, group_id: str) -> str:
