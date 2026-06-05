@@ -518,6 +518,14 @@ def extract_messages(raw: list[dict]) -> list[dict]:
         mentions = data.get("mentions", []) or []
         timestamp = envelope.get("timestamp") or data.get("timestamp")
 
+        # Reply-quotes: surface the quoted message so bare imperatives like
+        # "zapamiętaj" / "translate this" carry their object in context.
+        quote_text = ((data.get("quote") or {}).get("text") or "").strip()
+        if quote_text:
+            if len(quote_text) > 500:
+                quote_text = quote_text[:500] + "…"
+            text = f"[replying to: {quote_text}]\n{text}".strip()
+
         # Group messages have groupInfo with groupId
         group_info = data.get("groupInfo", {})
         group_id = group_info.get("groupId") if group_info else None

@@ -19,7 +19,7 @@ def _base() -> str:
 
 
 @tool
-def remember(content: str) -> str:
+def remember(content: str, verbatim: bool = False) -> str:
     """Save a durable fact to long-term memory.
 
     Call this when the user states a lasting preference, a stable fact about
@@ -27,16 +27,25 @@ def remember(content: str) -> str:
     Do NOT call this for transient conversation, questions you just asked,
     your own reasoning, or anything the user did not actually state.
 
+    If the user points at a specific statement to remember (e.g. replying to a
+    message with "remember this"), pass that exact statement as `content` and
+    set verbatim=True so it is stored as-is, without LLM rephrasing.
+    If you cannot tell WHAT to remember, do not guess — ask the user instead
+    of calling this tool.
+
     The write is asynchronous — this returns immediately while Mem0 extracts
     facts in the background. Safe to call mid-conversation.
 
     Args:
-        content: The fact to remember, phrased as a short declarative statement.
+        content: The fact to remember, phrased as a short declarative statement
+            (or the user's exact words when verbatim=True).
+        verbatim: Store content exactly as given, skipping fact extraction.
     """
     try:
         resp = httpx.post(
             f"{_base()}/v1/memory",
-            json={"content": content, "user_id": config.memory.default_user_id},
+            json={"content": content, "user_id": config.memory.default_user_id,
+                  "verbatim": verbatim},
             timeout=config.memory.timeout,
         )
         resp.raise_for_status()
